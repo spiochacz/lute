@@ -52,6 +52,10 @@ const crosshatchBytes: Uint8Array = new Uint8Array([lex.ItemCrosshatch]);
 
 declare module "./types.ts" {
   interface FormatRenderer {
+    // PORT-NOTE: hook for the per-child cache (tasks/004), no behaviour change: newBuffer and trimWriterTo are the only ways the
+    // writer of a container is created and the root writer is trimmed. The default is the statement they replace.
+    newBuffer(): bytes.Buffer;
+    trimWriterTo(buf: Uint8Array): void;
     renderCallout(node: ast.Node, entering: boolean): ast.WalkStatus;
     renderHTMLTag(node: ast.Node, entering: boolean): ast.WalkStatus;
     renderHTMLTagOpen(node: ast.Node, entering: boolean): ast.WalkStatus;
@@ -945,7 +949,7 @@ FormatRenderer.prototype.renderFootnotesDefBlock = function (this: FormatRendere
 FormatRenderer.prototype.renderFootnotesDef = function (this: FormatRenderer, node: ast.Node, entering: boolean): ast.WalkStatus {
   const r = this;
   if (entering) {
-    r.Writer = new bytes.Buffer();
+    r.Writer = r.newBuffer(); // PORT-NOTE: hook for the per-child cache (tasks/004), no behaviour change: the default is new bytes.Buffer()
     r.NodeWriterStack.push(r.Writer);
     r.WriteString("[" + util.BytesToStr(nodeTokens(node)) + "]: ");
   } else {
@@ -1383,24 +1387,40 @@ FormatRenderer.prototype.renderInlineHTML = function (this: FormatRenderer, node
   return ast.WalkContinue;
 };
 
+// newBuffer and trimWriterTo: see the PORT-NOTE in the declaration of FormatRenderer at the top of this file.
+FormatRenderer.prototype.newBuffer = function (this: FormatRenderer): bytes.Buffer {
+  return new bytes.Buffer();
+};
+
+FormatRenderer.prototype.trimWriterTo = function (this: FormatRenderer, buf: Uint8Array): void {
+  setWriterFromOwn(this, buf);
+};
+
+// closeDocumentWriter is the close of the document: it trims the root writer of the surrounding blanks and ends it with a newline.
+// It is the exit of renderDocument, and the replay of the recording renderer (recording_format_renderer.ts) runs this same function.
+// PORT-NOTE: the function is shared by renderDocument and the replay of the recording renderer (tasks/004); no behaviour change.
+export function closeDocumentWriter(r: FormatRenderer): void {
+  let buf: Uint8Array;
+  if (r.Options.KeepParagraphBeginningSpace) {
+    buf = bytes.TrimRight(r.Writer.Bytes(), blankTrimChars);
+    buf = bytes.TrimLeft(buf, newlineTrimChars);
+  } else {
+    buf = bytes.Trim(r.Writer.Bytes(), blankTrimChars);
+  }
+  // PORT-NOTE: perf, departs from 1:1 (render/format_renderer.go:1414): setWriterFromOwn moves buf to the start of r.Writer's storage
+  // and cuts the length, instead of Reset and Write of the same bytes. The content and LastOut are the same, and the newline follows.
+  r.trimWriterTo(buf); // PORT-NOTE: hook for the per-child cache (tasks/004), no behaviour change: the default is setWriterFromOwn
+  r.WriteByte(lex.ItemNewline);
+}
+
 FormatRenderer.prototype.renderDocument = function (this: FormatRenderer, node: ast.Node, entering: boolean): ast.WalkStatus {
   const r = this;
   if (entering) {
-    r.Writer = new bytes.Buffer();
+    r.Writer = r.newBuffer(); // PORT-NOTE: hook for the per-child cache (tasks/004), no behaviour change: the default is new bytes.Buffer()
     r.NodeWriterStack.push(r.Writer);
   } else {
     r.NodeWriterStack.length = r.NodeWriterStack.length - 1;
-    let buf: Uint8Array;
-    if (r.Options.KeepParagraphBeginningSpace) {
-      buf = bytes.TrimRight(r.Writer.Bytes(), blankTrimChars);
-      buf = bytes.TrimLeft(buf, newlineTrimChars);
-    } else {
-      buf = bytes.Trim(r.Writer.Bytes(), blankTrimChars);
-    }
-    // PORT-NOTE: perf, departs from 1:1 (render/format_renderer.go:1414): setWriterFromOwn moves buf to the start of r.Writer's storage
-    // and cuts the length, instead of Reset and Write of the same bytes. The content and LastOut are the same, and the newline follows.
-    setWriterFromOwn(r, buf);
-    r.WriteByte(lex.ItemNewline);
+    closeDocumentWriter(r);
   }
   return ast.WalkContinue;
 };
@@ -1796,7 +1816,7 @@ FormatRenderer.prototype.renderBlockquote = function (this: FormatRenderer, node
   const r = this;
   if (entering) {
     r.newlineBeforeBlock(node);
-    r.Writer = new bytes.Buffer();
+    r.Writer = r.newBuffer(); // PORT-NOTE: hook for the per-child cache (tasks/004), no behaviour change: the default is new bytes.Buffer()
     r.NodeWriterStack.push(r.Writer);
   } else {
     const writer = r.NodeWriterStack[r.NodeWriterStack.length - 1];
@@ -1838,7 +1858,7 @@ FormatRenderer.prototype.renderBlockquote = function (this: FormatRenderer, node
     r.Writer = r.NodeWriterStack[r.NodeWriterStack.length - 1];
     buf = bytes.TrimSpace(r.Writer.Bytes());
     // PORT-NOTE: perf, departs from 1:1 (render/format_renderer.go:1816): setWriterFromOwn, see renderDocument; the content and LastOut are the same.
-    setWriterFromOwn(r, buf);
+    r.trimWriterTo(buf); // PORT-NOTE: hook for the per-child cache (tasks/004), no behaviour change: the default is setWriterFromOwn
     if (!node.ParentIs(ast.NodeTableCell)) { // Line breaks are not allowed in a table, or the table layout breaks https://github.com/Vanessa219/vditor/issues/368
       if (r.withoutKramdownBlockIAL(node)) {
         r.WriteString("\n\n");
@@ -1897,7 +1917,7 @@ FormatRenderer.prototype.renderList = function (this: FormatRenderer, node: ast.
   const r = this;
   if (entering) {
     r.newlineBeforeBlock(node);
-    r.Writer = new bytes.Buffer();
+    r.Writer = r.newBuffer(); // PORT-NOTE: hook for the per-child cache (tasks/004), no behaviour change: the default is new bytes.Buffer()
     r.NodeWriterStack.push(r.Writer);
   } else {
     const writer = r.NodeWriterStack[r.NodeWriterStack.length - 1];
@@ -1906,7 +1926,7 @@ FormatRenderer.prototype.renderList = function (this: FormatRenderer, node: ast.
     r.Writer = r.NodeWriterStack[r.NodeWriterStack.length - 1];
     const buf = bytes.TrimSpace(r.Writer.Bytes());
     // PORT-NOTE: perf, departs from 1:1 (render/format_renderer.go:1881): setWriterFromOwn, see renderDocument; the content and LastOut are the same.
-    setWriterFromOwn(r, buf);
+    r.trimWriterTo(buf); // PORT-NOTE: hook for the per-child cache (tasks/004), no behaviour change: the default is setWriterFromOwn
     if (!node.ParentIs(ast.NodeTableCell)) {
       if (r.withoutKramdownBlockIAL(node)) {
         r.WriteString("\n\n");
@@ -1919,7 +1939,7 @@ FormatRenderer.prototype.renderList = function (this: FormatRenderer, node: ast.
 FormatRenderer.prototype.renderListItem = function (this: FormatRenderer, node: ast.Node, entering: boolean): ast.WalkStatus {
   const r = this;
   if (entering) {
-    r.Writer = new bytes.Buffer();
+    r.Writer = r.newBuffer(); // PORT-NOTE: hook for the per-child cache (tasks/004), no behaviour change: the default is new bytes.Buffer()
     r.NodeWriterStack.push(r.Writer);
     if (r.Options.KramdownBlockIAL && null !== node.Next && ast.NodeKramdownBlockIAL === node.Next.Type) {
       const liIAL = node.Next;
@@ -1989,7 +2009,7 @@ FormatRenderer.prototype.renderListItem = function (this: FormatRenderer, node: 
     r.Writer = r.NodeWriterStack[r.NodeWriterStack.length - 1];
     buf = bytes.TrimSpace(r.Writer.Bytes());
     // PORT-NOTE: perf, departs from 1:1 (render/format_renderer.go:1962): setWriterFromOwn, see renderDocument; the content and LastOut are the same.
-    setWriterFromOwn(r, buf);
+    r.trimWriterTo(buf); // PORT-NOTE: hook for the per-child cache (tasks/004), no behaviour change: the default is setWriterFromOwn
     if (!node.ParentIs(ast.NodeTableCell)) {
       r.WriteString("\n");
     }

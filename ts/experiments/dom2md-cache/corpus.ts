@@ -2,7 +2,8 @@
 // DOM by the REFERENCE bundle (the GopherJS build) with its own forward methods, then split into
 // top-level children.
 
-import { readFileSync, readdirSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { newEngines, REPO_ROOT } from "../../test/e2e/helpers.ts";
 import type { Engines, SetterCall } from "../../test/e2e/helpers.ts";
@@ -70,6 +71,39 @@ export function loadMarkdownCorpus(): MdDoc[] {
     }
   }
   return docs;
+}
+
+// The whole input of the fuzzer that comes from the repository: the Markdown corpus and the hand-written DOM of both modes.
+// It is hashed (sha256 of the canonical JSON) and can be frozen in a snapshot file, so that a seed reproduces even when the
+// repository files change (tasks/004, (f) item 2). The forward conversion by the reference bundle is deterministic and is not part of the snapshot.
+export interface Corpus {
+  mds: MdDoc[];
+  hand: Record<Mode, string[]>;
+  hash: string; // sha256 hex of the canonical JSON of mds and hand
+  source: "repository" | "snapshot";
+}
+
+function handWrittenBoth(): Record<Mode, string[]> {
+  return { wysiwyg: loadHandWrittenDom("wysiwyg"), ir: loadHandWrittenDom("ir") };
+}
+
+// loadCorpus reads the snapshot when the file exists; otherwise it reads the repository and, when a path is given, writes the snapshot.
+export function loadCorpus(snapshotPath: string | null): Corpus {
+  let mds: MdDoc[];
+  let hand: Record<Mode, string[]>;
+  let source: "repository" | "snapshot" = "repository";
+  if (snapshotPath !== null && existsSync(snapshotPath)) {
+    const j = JSON.parse(readFileSync(snapshotPath, "utf8")) as { mds: MdDoc[]; hand: Record<Mode, string[]> };
+    mds = j.mds;
+    hand = j.hand;
+    source = "snapshot";
+  } else {
+    mds = loadMarkdownCorpus();
+    hand = handWrittenBoth();
+    if (snapshotPath !== null) writeFileSync(snapshotPath, JSON.stringify({ mds, hand }));
+  }
+  const hash = createHash("sha256").update(JSON.stringify({ mds, hand })).digest("hex");
+  return { mds, hand, hash, source };
 }
 
 // DOM documents written by hand in the Go test tables (vditorDOM2MdTests, vditorIRDOM2MdTests).

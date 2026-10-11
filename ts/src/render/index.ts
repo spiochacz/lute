@@ -14,6 +14,7 @@ export * from "./protyle_export_md_renderer.ts";
 export * from "./protyle_export_renderer.ts";
 export * from "./protyle_preview_renderer.ts";
 export * from "./protyle_renderer.ts";
+export * from "./recording_format_renderer.ts";
 export * from "./renderer.ts";
 export * from "./sanitizer.ts";
 export * from "./setext.ts";

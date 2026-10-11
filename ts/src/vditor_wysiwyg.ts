@@ -202,9 +202,11 @@ Lute.prototype.HTML2Md = function (this: Lute, htmlStr: string): string {
   return markdown;
 };
 
-Lute.prototype.vditorDOM2Md = function (this: Lute, htmlStr: string): string {
-  const lute = this;
-  let markdown = "";
+// vditorDOM2MdPrepare is the first stage of vditorDOM2Md: it removes the caret, normalises the trailing white space, parses the string into a DOM tree
+// and adjusts the DOM. It returns null where vditorDOM2Md returns its empty result before any rendering.
+// PORT-NOTE: hook for the per-child cache (tasks/004), no behaviour change: the stages of vditorDOM2Md are functions of their own, so that the
+// recording renderer (render/recording_format_renderer.ts) runs the same stages; they are exported for tests and are not methods of Lute.
+export function vditorDOM2MdPrepare(lute: Lute, htmlStr: string): html.Node | null {
   // Remove the caret
   htmlStr = strings.ReplaceAll(htmlStr, editor.FrontEndCaret, "");
 
@@ -215,12 +217,18 @@ Lute.prototype.vditorDOM2Md = function (this: Lute, htmlStr: string): string {
   // Parse the string into a DOM tree
   const htmlRoot = util.ParseHTML(htmlStr);
   if (null === htmlRoot) {
-    return markdown;
+    return null;
   }
 
   // Adjust the DOM structure
   lute.adjustVditorDOM(htmlRoot);
 
+  return htmlRoot;
+}
+
+// vditorDOM2MdBuildTree is the second stage of vditorDOM2Md: it converts the adjusted DOM tree into a Markdown syntax tree and adjusts the tree.
+// PORT-NOTE: hook for the per-child cache (tasks/004), no behaviour change: see vditorDOM2MdPrepare.
+export function vditorDOM2MdBuildTree(lute: Lute, htmlRoot: html.Node): parse.Tree {
   // Convert the HTML tree into a Markdown AST
   const tree = new parse.Tree();
   tree.Name = "";
@@ -263,12 +271,35 @@ Lute.prototype.vditorDOM2Md = function (this: Lute, htmlStr: string): string {
     return ast.WalkContinue;
   });
 
-  // Render the AST as formatted Markdown
+  return tree;
+}
+
+// vditorDOM2MdRenderOptions returns the options of the Markdown formatter that vditorDOM2Md renders with.
+// PORT-NOTE: hook for the per-child cache (tasks/004), no behaviour change: see vditorDOM2MdPrepare.
+export function vditorDOM2MdRenderOptions(): render.Options {
   const options = render.NewOptions();
   options.AutoSpace = false;
   options.FixTermTypo = false;
-  const renderer = render.NewFormatRenderer(tree, options, lute.ParseOptions);
-  const formatted = renderer.Render();
+  return options;
+}
+
+// vditorDOM2MdRender is the render stage of vditorDOM2Md: the Markdown formatter renders the tree.
+// PORT-NOTE: hook for the per-child cache (tasks/004), no behaviour change: see vditorDOM2MdPrepare.
+export function vditorDOM2MdRender(lute: Lute, tree: parse.Tree): Uint8Array {
+  const renderer = render.NewFormatRenderer(tree, vditorDOM2MdRenderOptions(), lute.ParseOptions);
+  return renderer.Render();
+}
+
+Lute.prototype.vditorDOM2Md = function (this: Lute, htmlStr: string): string {
+  const lute = this;
+  let markdown = "";
+  const htmlRoot = vditorDOM2MdPrepare(lute, htmlStr);
+  if (null === htmlRoot) {
+    return markdown;
+  }
+  const tree = vditorDOM2MdBuildTree(lute, htmlRoot);
+  // Render the AST as formatted Markdown
+  const formatted = vditorDOM2MdRender(lute, tree);
   markdown = conv.StringFromBytes(formatted);
   return markdown;
 };

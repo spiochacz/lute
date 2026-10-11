@@ -1,0 +1,32 @@
+--- a/vditor_ir.go
++++ b/vditor_ir.go
+@@ -152,13 +152,28 @@
+ 		if "code-block" == dataType || "html-block" == dataType || "math-block" == dataType || "yaml-front-matter" == dataType {
+ 			if ("code-block" == dataType || "math-block" == dataType) &&
+ 				!strings.Contains(util.DomAttrValue(n.FirstChild, "data-type"), "-block-open-marker") {
++				if "code-block" == dataType && nil != n.FirstChild && atom.Pre == n.FirstChild.DataAtom {
++					// An indented code block has no fence markers in the IR DOM: build a code block and restore the tip
++					tip := tree.Context.Tip
++					node := &ast.Node{Type: ast.NodeCodeBlock}
++					tree.Context.Tip.AppendChild(node)
++					tree.Context.Tip = node
++					for c := n.FirstChild; c != nil; c = c.NextSibling {
++						lute.genASTByVditorIRDOM(c, tree)
++					}
++					tree.Context.Tip = tip
++					if nil == node.FirstChild {
++						node.Unlink()
++					}
++					return
++				}
++
+ 				// 处理在结尾 ``` 或者 $$ 后换行的情况
+ 				// TODO: 插入符现在已经不可能出现在该位置，确认后移除该段代码
+ 				p := &ast.Node{Type: ast.NodeParagraph}
+ 				text := &ast.Node{Type: ast.NodeText, Tokens: []byte(util.DomText(n.FirstChild))}
+ 				p.AppendChild(text)
+ 				tree.Context.Tip.AppendChild(p)
+-				tree.Context.Tip = p
+ 				return
+ 			}
+ 

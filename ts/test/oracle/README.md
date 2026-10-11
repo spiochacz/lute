@@ -5,7 +5,7 @@
 ## What it is
 
 - A GopherJS build of the Go source at the commit in `../../UPSTREAM_PIN`, with the `javascript` build tag, built with Go 1.21.13 and GopherJS 1.21.0.
-- The Go source is the repository's source with the patches in `../../tools/oracle/patches/` applied. Currently there is one patch, `0001-code-block-keeps-block-ial.patch`: fenced and indented code blocks keep their block attributes (kramdown IAL), as native Go does. The `javascript` build lost them (`tasks/002-upstream-bugs.md`, item 59). This is a deliberate departure from the JavaScript build, made as a Go patch and a rebuilt bundle, never as a filter in the tests.
+- The Go source is the repository's source with the patches in `../../tools/oracle/patches/` applied. Patch `0001-code-block-keeps-block-ial.patch`: fenced and indented code blocks keep their block attributes (kramdown IAL), as native Go does. The `javascript` build lost them (`tasks/002-upstream-bugs.md`, item 59). This is a deliberate departure from the JavaScript build, made as a Go patch and a rebuilt bundle, never as a filter in the tests. Patch `0002-ir-indented-code-block-restores-tip.patch`: `VditorIRDOM2Md` builds a code block for an indented code block of the IR DOM and restores the builder's tip (`tasks/002-upstream-bugs.md`, item 64); this is a fix of upstream behaviour, so here the bundle departs from upstream Go as well.
 - Loading it as a script sets `globalThis.Lute`, as `javascript/lute.min.js` does.
 
 `lute.ref.min.cjs` is the default for `oraclePath()` in `oracle.ts`. `LUTE_ORACLE` overrides it with another bundle.

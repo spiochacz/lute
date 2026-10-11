@@ -11,9 +11,9 @@ import { Lute as LuteClass } from "../../src/types.ts";
 import type * as html from "../../src/html/index.ts";
 
 const UL3 = 'data-tight="true" data-marker="*" data-block="0"';
-// An IR code block without an open marker: the IR builder leaves the tip open (tip-open, upstream item 64).
-const TIP_OPEN = '<div data-type="code-block" data-block="0"><span data-type="text">indented</span></div>';
-const TIP_OPEN_EDITED = '<div data-type="code-block" data-block="0"><span data-type="text">indented!</span></div>';
+// An IR math block with an open marker and no close marker: the builder leaves the tip inside the math block (tip-open).
+const TIP_OPEN = '<div data-type="math-block" data-block="0"><span data-type="math-block-open-marker">$$</span></div>';
+const TIP_OPEN_EDITED = '<div data-type="math-block" data-block="0"><span data-type="math-block-open-marker">$$ </span></div>';
 const LIST_PAIR = `<ul ${UL3}><li data-marker="*">a</li></ul><ul data-block="0"><li>b</li></ul>`;
 const OPAQUE = '<div data-type="html-block" data-block="0"><pre class="vditor-wysiwyg__preview" data-render="2"><form></pre></div>';
 

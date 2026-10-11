@@ -257,13 +257,29 @@ Lute.prototype.genASTByVditorIRDOM = function (this: Lute, n: html.Node, tree: p
       if ("code-block" === dataType || "html-block" === dataType || "math-block" === dataType || "yaml-front-matter" === dataType) {
         if (("code-block" === dataType || "math-block" === dataType) &&
           !strings.Contains(util.DomAttrValue(n.FirstChild, "data-type"), "-block-open-marker")) {
+          if ("code-block" === dataType && null !== n.FirstChild && atom.Pre === n.FirstChild.DataAtom) {
+            // An indented code block has no fence markers in the IR DOM: build a code block and restore the tip
+            // (departure from upstream, tasks/002 item 64; oracle patch 0002)
+            const tip = tree.Context!.Tip!;
+            const node = new ast.Node(ast.NodeCodeBlock);
+            tip.AppendChild(node);
+            tree.Context!.Tip = node;
+            for (let c = n.FirstChild as html.Node | null; c !== null; c = c.NextSibling) {
+              lute.genASTByVditorIRDOM(c, tree);
+            }
+            tree.Context!.Tip = tip;
+            if (null === node.FirstChild) {
+              node.Unlink();
+            }
+            return;
+          }
+
           // Handle the line break after the closing ``` or $$
           // TODO: the caret can not appear at this position any more, remove this code after confirming
           const p = new ast.Node(ast.NodeParagraph);
           const text = new ast.Node(ast.NodeText, conv.BytesFromString(util.DomText(n.FirstChild)));
           p.AppendChild(text);
           tree.Context!.Tip!.AppendChild(p);
-          tree.Context!.Tip = p;
           return;
         }
 

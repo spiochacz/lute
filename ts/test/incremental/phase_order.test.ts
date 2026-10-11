@@ -11,8 +11,8 @@ import type { Lute } from "../../src/index.ts";
 const UL3 = 'data-tight="true" data-marker="*" data-block="0"';
 const OPAQUE = '<div data-type="html-block" data-block="0"><pre class="vditor-wysiwyg__preview" data-render="2"><form></pre></div>';
 const LIST_PAIR = `<ul ${UL3}><li data-marker="*">a</li></ul><ul data-block="0"><li>b</li></ul>`;
-// An IR code block without an open marker: the IR builder leaves the tip open (vditor_ir.ts, the code-block branch; upstream item 64).
-const TIP_OPEN = '<div data-type="code-block" data-block="0"><span data-type="text">indented</span></div>';
+// An IR math block with an open marker and no close marker: the builder leaves the tip inside the math block.
+const TIP_OPEN = '<div data-type="math-block" data-block="0"><span data-type="math-block-open-marker">$$</span></div>';
 
 function clean(from: number, count: number): string[] {
   return Array.from({ length: count }, (_, i) => `<p data-block="0">clean ${from + i}</p>`);

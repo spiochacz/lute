@@ -1,32 +1,17 @@
 // New in the TypeScript port: no Go counterpart, not part of the 1:1 port (ts/PORTING.md, "Code without a Go counterpart"). Per-child cache for VditorDOM2Md / VditorIRDOM2Md: tasks/004-incremental-and-fast-paths.md, "Milestone B specification".
 
-// The read barrier of the sandbox (section 3.3 and 3.4). A guard replaces a field of the few objects that connect a child to its
-// neighbours by an accessor; a stub is an object that answers only the declared fields and throws BarrierViolation for anything else.
+// The read barrier of the sandbox (section 3.3 and 3.4). Milestone C (C1): the neighbours are linked by plain assignments, so no node
+// is reconfigured by an accessor (its properties stay fast); a stub is an object that answers only the fields of its key and throws
+// BarrierViolation for anything else.
 
 import * as ast from "../ast/index.ts";
 import * as html from "../html/index.ts";
 import { BarrierViolation } from "./piece.ts";
 
-// guard replaces obj[field] by an accessor. read(backing) gives the value the code sees; the setter stores into the backing variable,
-// which starts with the current value.
-export function guard<T extends object, K extends keyof T>(obj: T, field: K, read: (backing: T[K]) => T[K]): void {
-  let backing: T[K] = obj[field];
-  Object.defineProperty(obj, field, {
-    configurable: true,
-    enumerable: true,
-    get: () => read(backing),
-    set: (v: T[K]) => {
-      backing = v;
-    },
-  });
-}
-
-// guardAst is guard; it is kept under one name in the code of the sandbox (section 3.4).
-export const guardAst = guard;
-
-// domStub is a stand-in for a DOM sibling of a top-level child. It answers DataAtom, Type and Attr (an array of attrs dummy attributes);
-// any other property read, and every write, throws.
-export function domStub(atom: number, attrs: number): html.Node {
+// domStub is a stand-in for a DOM sibling of a top-level child. It answers DataAtom and Type; Attr answers attrs dummy attributes when
+// attrs is a number, and throws when attrs is null (the previous sibling: nothing may read its attributes, milestone C step C1).
+// Any other property read, and every write, throws.
+export function domStub(atom: number, attrs: number | null, side: "prev" | "next"): html.Node {
   const target = new html.Node();
   return new Proxy(target, {
     get(_t, prop): unknown {
@@ -39,16 +24,19 @@ export function domStub(atom: number, attrs: number): html.Node {
         case "Type":
           return html.ElementNode;
         case "Attr":
+          if (attrs === null) {
+            throw new BarrierViolation("dom." + side + ".Attr");
+          }
           return Array.from({ length: attrs }, () => ({ Namespace: "", Key: "k", Val: "v" }));
         default:
-          throw new BarrierViolation("dom.next." + prop);
+          throw new BarrierViolation("dom." + side + "." + prop);
       }
     },
     set(_t, prop): boolean {
-      throw new BarrierViolation("dom.next.=" + String(prop));
+      throw new BarrierViolation("dom." + side + ".=" + String(prop));
     },
     deleteProperty(_t, prop): boolean {
-      throw new BarrierViolation("dom.next.delete " + String(prop));
+      throw new BarrierViolation("dom." + side + ".delete " + String(prop));
     },
   }) as html.Node;
 }

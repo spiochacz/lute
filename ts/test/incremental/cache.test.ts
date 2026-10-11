@@ -10,9 +10,9 @@ import { New, EnableIncrementalDom2Md, DisableIncrementalDom2Md, IncrementalDom2
 import { MAX_VARIANTS, State, addVariant, evict, flat, newEntry, removeEntry } from "../../src/incremental/cache.ts";
 import type { Entry, Variant } from "../../src/incremental/piece.ts";
 
-// variant returns a variant of the given size; endLastOut carries an identity for the assertions.
+// variant returns a variant of the given size; endLastOut carries an identity for the assertions, and the key is distinct per id.
 function variant(id: number, bytes: number): Variant {
-  return { readKeys: [], readVals: [], ops: [], endLastOut: id, bytes };
+  return { key: "key" + String(id), ops: [], endLastOut: id, bytes };
 }
 
 // put adds an entry to the WYSIWYG map and its bytes to the accounting, as the engine does after a run.
@@ -103,7 +103,7 @@ test("byte accounting: addVariant adds the variant's bytes to the entry and the 
 });
 
 test(`variant cap: an entry keeps at most ${MAX_VARIANTS} variants and drops the oldest`, () => {
-  assert.equal(MAX_VARIANTS, 8);
+  assert.equal(MAX_VARIANTS, 16, "milestone C: 16 (cache.ts; 8 in milestone B)");
   const st = new State({});
   const e = put(st, "<p>x</p>", 0, 1);
   const base = e.bytes;
@@ -113,7 +113,7 @@ test(`variant cap: an entry keeps at most ${MAX_VARIANTS} variants and drops the
   assert.equal(e.variants.length, MAX_VARIANTS);
   assert.deepEqual(
     e.variants.map((v) => v.endLastOut),
-    [2, 3, 4, 5, 6, 7, 8, 9],
+    Array.from({ length: MAX_VARIANTS }, (_, i) => i + 2),
     "variant 1 (the oldest) is dropped",
   );
   assert.equal(e.bytes, base + 10 * MAX_VARIANTS);

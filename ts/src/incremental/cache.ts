@@ -4,7 +4,9 @@
 
 import type { Entry, Variant } from "./piece.ts";
 
-export const MAX_VARIANTS = 8;
+// MAX_VARIANTS: 8 in milestone B. Milestone C (C1, always-key): the uncapped maximum on the default audit sample is 14 variants for one
+// entry (the warm pass then has 0 misses; at 8 it had 24), so 16 (tasks/004, milestone C implementation, deviation C-1).
+export const MAX_VARIANTS = 16;
 
 export interface IncrementalOptions {
   strict?: boolean;
@@ -20,8 +22,12 @@ export interface IncrementalStats {
   inconsistencies: Record<string, number>;
   children: number;
   hits: number;
-  misses: number;
-  sandboxRuns: number;
+  misses: number; // alive children at the replay with no variant of their key (a new child is always one)
+  sandboxRuns: number; // analyses of new children plus full runs of a variant miss (milestone C: no run is repeated per context)
+  analyses: number; // phase analyse (parse, certificate, passes 1 to 3) calls of new children (milestone C, C2)
+  builds: number; // phase build calls (passes 4 to 15, genAST, adjustTree) of new children
+  renders: number; // phase render calls of the children rendered from their build
+  memoHits: number; // calls answered by the negative memo of a stored refusal (milestone C, C3); each is also counted as a fallback
   bytesIn: number;
   entries: number;
   bytesHeld: number;
@@ -40,6 +46,10 @@ export function newStats(): IncrementalStats {
     hits: 0,
     misses: 0,
     sandboxRuns: 0,
+    analyses: 0,
+    builds: 0,
+    renders: 0,
+    memoHits: 0,
     bytesIn: 0,
     entries: 0,
     bytesHeld: 0,
@@ -48,8 +58,30 @@ export function newStats(): IncrementalStats {
   };
 }
 
+// MemoSlot is the negative memo of one mode (milestone C, C3): the entry whose stored refusal ended the last call of the mode, and the number of
+// memo hits since it was set (every MEMO_REPROBE-th hit runs the full path instead, which refreshes or clears the slot).
+export interface MemoSlot {
+  entry: Entry | null;
+  hits: number;
+}
+
+export const MEMO_REPROBE = 32;
+
+export function newMemoSlot(): MemoSlot {
+  return { entry: null, hits: 0 };
+}
+
+// clearMemoSlots empties both memos in place (a slot held by a call stays valid).
+export function clearMemoSlots(st: State): void {
+  for (const slot of [st.memo.wysiwyg, st.memo.ir]) {
+    slot.entry = null;
+    slot.hits = 0;
+  }
+}
+
 export class State {
   maps: { wysiwyg: Map<string, Entry>; ir: Map<string, Entry> };
+  memo: { wysiwyg: MemoSlot; ir: MemoSlot }; // one memo per mode: a refusal of one mode never decides a call of the other
   fp: string;
   bytes: number;
   callNo: number;
@@ -58,6 +90,7 @@ export class State {
 
   constructor(options: IncrementalOptions) {
     this.maps = { wysiwyg: new Map<string, Entry>(), ir: new Map<string, Entry>() };
+    this.memo = { wysiwyg: newMemoSlot(), ir: newMemoSlot() };
     this.fp = "";
     this.bytes = 0;
     this.callNo = 0;
@@ -124,5 +157,6 @@ export function evict(st: State, call: number): void {
     st.maps.wysiwyg.clear();
     st.maps.ir.clear();
     st.bytes = 0;
+    clearMemoSlots(st);
   }
 }

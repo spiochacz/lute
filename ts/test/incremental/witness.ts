@@ -10,22 +10,24 @@ import * as conv from "../../src/runtime/conv.ts";
 import type { Lute } from "../../src/index.ts";
 import type { ModeAdapter } from "../../src/incremental/sandbox.ts";
 import { runChild } from "../../src/incremental/sandbox.ts";
-import type { Context, ReadKey, Variant } from "../../src/incremental/piece.ts";
+import { contextKey } from "../../src/incremental/piece.ts";
+import type { Context, Variant } from "../../src/incremental/piece.ts";
 
-export const BASE_CONTEXT: Context = { lastOut: 10, prev: -1, next: -1, isFirst: true, isLast: true, domPrev: -1, domNext: -1, domNextAttrs: 0 };
+// The fields of the context (milestone C, C1): isFirst and isLast are gone (they are prev < 0 and next < 0).
+export type ContextField = "lastOut" | "prev" | "next" | "domPrev" | "domNext" | "domNextAttrs";
 
-// The two values of each field of the declared context. Only the field changes between A and B.
-export const FIELD_VALUES: Array<{ field: ReadKey; a: number | boolean; b: number | boolean }> = [
+export const BASE_CONTEXT: Context = { lastOut: 10, prev: -1, next: -1, domPrev: -1, domNext: -1, domNextAttrs: 0 };
+
+// The two values of each field of the declared context. Only the field changes between A and B. isLast is witnessed by next (-1 against a type).
+export const FIELD_VALUES: Array<{ field: ContextField; a: number | boolean; b: number | boolean }> = [
   { field: "lastOut", a: 10, b: 0x78 },
-  { field: "isLast", a: true, b: false },
-  { field: "isFirst", a: true, b: false },
   { field: "prev", a: -1, b: ast.NodeText },
   { field: "next", a: -1, b: ast.NodeParagraph },
   { field: "domPrev", a: -1, b: atom.P },
   { field: "domNext", a: -1, b: atom.Ul },
 ];
 
-export function withField(field: ReadKey, value: number | boolean): Context {
+export function withField(field: ContextField, value: number | boolean): Context {
   return { ...BASE_CONTEXT, [field]: value };
 }
 
@@ -37,7 +39,7 @@ export function outcome(lute: Lute, adapter: ModeAdapter, html: string, ctx: Con
 }
 
 export interface Witness {
-  field: ReadKey;
+  field: ContextField;
   html: string;
   a: number | boolean;
   b: number | boolean;
@@ -54,7 +56,7 @@ export interface SearchResult {
 
 // searchWitness examines the candidates in order, for at most budgetMs, and returns the first child whose outcome differs between the
 // two values of the field.
-export function searchWitness(lute: Lute, adapter: ModeAdapter, field: ReadKey, candidates: string[], budgetMs: number): SearchResult {
+export function searchWitness(lute: Lute, adapter: ModeAdapter, field: ContextField, candidates: string[], budgetMs: number): SearchResult {
   const spec = FIELD_VALUES.find((f) => f.field === field);
   if (spec === undefined) {
     throw new Error("searchWitness: unknown field " + field);
@@ -82,7 +84,7 @@ export function searchWitness(lute: Lute, adapter: ModeAdapter, field: ReadKey, 
   return { witness: null, candidates: examined, ms: Date.now() - start };
 }
 
-// matchesContext reports whether a variant matches a context (section 2.1).
+// matchesContext reports whether a variant matches a context: the same key (milestone C, C1; the read-recording match of section 2.1 is gone).
 export function matchesContext(v: Variant, c: Context): boolean {
-  return v.readKeys.every((k, i) => c[k] === v.readVals[i]);
+  return v.key === contextKey(c);
 }

@@ -15,8 +15,8 @@ import * as parse from "../../src/parse/index.ts";
 import { scanTopLevel } from "../../src/incremental/scanner.ts";
 import { runChild, listCoupling, WYSIWYG_ADAPTER, IR_ADAPTER } from "../../src/incremental/sandbox.ts";
 import type { ModeAdapter } from "../../src/incremental/sandbox.ts";
-import { LASTOUT_PASS } from "../../src/incremental/piece.ts";
-import type { ChildInfo, Context, ReadKey, Variant } from "../../src/incremental/piece.ts";
+import { contextKey } from "../../src/incremental/piece.ts";
+import type { ChildInfo, Context, Variant } from "../../src/incremental/piece.ts";
 import { FormatRenderer } from "../../src/render/types.ts";
 import { closeDocumentWriter } from "../../src/render/format_renderer.ts";
 import { auditDocuments } from "./corpus_docs.ts";
@@ -25,10 +25,11 @@ import { FULL, sample } from "../e2e/full.ts";
 // The whole corpus in the full run; every 4th document of it in the default run (the minimum of compared documents scales with it).
 const MIN_COMPARED = FULL ? 500 : 125;
 
-const PROVISIONAL: Context = { lastOut: 10, prev: -1, next: -1, isFirst: true, isLast: true, domPrev: -1, domNext: -1, domNextAttrs: 0 };
+const PROVISIONAL: Context = { lastOut: 10, prev: -1, next: -1, domPrev: -1, domNext: -1, domNextAttrs: 0 };
 
+// A variant is used for a context with the same key (milestone C, C1: no read recording).
 function matches(v: Variant, c: Context): boolean {
-  return v.readKeys.every((k: ReadKey, i: number) => c[k] === v.readVals[i]);
+  return v.key === contextKey(c);
 }
 
 export interface Assembled {
@@ -100,8 +101,6 @@ export function assemble(lute: Lute, adapter: ModeAdapter, h: string): Assembled
       lastOut: R.LastOut,
       prev: prevT[i],
       next: nextT[i],
-      isFirst: prevT[i] < 0,
-      isLast: nextT[i] < 0,
       domPrev: domP[i],
       domNext: domN[i],
       domNextAttrs: domNA[i],
@@ -132,9 +131,7 @@ export function assemble(lute: Lute, adapter: ModeAdapter, h: string): Assembled
           break;
       }
     }
-    if (v.endLastOut !== LASTOUT_PASS) {
-      R.LastOut = v.endLastOut;
-    }
+    R.LastOut = v.endLastOut;
   }
   closeDocumentWriter(R);
   return { text: conv.StringFromBytes(R.Writer.Bytes()), reason: null };

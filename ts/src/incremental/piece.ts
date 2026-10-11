@@ -6,28 +6,28 @@ import type { RootOp } from "../render/recording_format_renderer.ts";
 
 export type Mode = "wysiwyg" | "ir";
 
-// endLastOut of a variant whose run never assigned LastOut.
-export const LASTOUT_PASS = -1;
-
-// The context a piece may read. Nothing else about the neighbours is reachable (section 3).
+// The context a piece may read. Nothing else about the neighbours is reachable (section 3). There is no read recording: the variant
+// key is the whole tuple (contextKey), so a run is a function of its key (milestone C, C1). isFirst and isLast are not fields: they are
+// the facts prev < 0 and next < 0, which the sandbox links from prev and next (invariant I1).
 export interface Context {
   lastOut: number; // LastOut of the renderer at entry, 0..255. The replay's value; 10 (LF) at the start of the document.
   prev: number; // ast.NodeType of the last top-level AST node before this piece's first one, -1 if none.
   next: number; // ast.NodeType of the first top-level AST node after this piece's last one, -1 if none.
-  isFirst: boolean; // no top-level AST node before this piece's first one.
-  isLast: boolean; // no top-level AST node after this piece's last one.
   domPrev: number; // html atom (DataAtom) of the nearest ALIVE top-level DOM sibling before, -1 if none.
   domNext: number; // same after.
-  domNextAttrs: number; // Attr.length of that sibling; used only to answer the covered mergeVditorDOMList0 read; never part of a key.
+  domNextAttrs: number; // Attr.length of that sibling: the stub answers Attr with it, so it is part of the key (invariant I4).
 }
 
-export type ReadKey = "lastOut" | "prev" | "next" | "isFirst" | "isLast" | "domPrev" | "domNext";
+// The key of a context: every field the stubs expose (invariant I4). A field added to Context must be added here; the test
+// context_key.test.ts enumerates the fields of a Context.
+export function contextKey(c: Context): string {
+  return `${c.lastOut},${c.prev},${c.next},${c.domPrev},${c.domNext},${c.domNextAttrs}`;
+}
 
 export interface Variant {
-  readKeys: ReadKey[]; // the context fields the run read, in order of first read, no duplicates
-  readVals: Array<number | boolean>; // the value of each at the time of the run (same index)
+  key: string; // contextKey of the context the run was made with; a variant is used only for an equal key
   ops: RootOp[]; // root-writer log, adjacent operations coalesced (section 2.3)
-  endLastOut: number; // 0..255, or LASTOUT_PASS
+  endLastOut: number; // 0..255: the renderer's LastOut at the end of the run (the replay adopts it)
   bytes: number; // memory estimate
 }
 

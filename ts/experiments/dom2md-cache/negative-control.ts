@@ -67,25 +67,42 @@ function coalesceHoist(ops: RootOp[]): RootOp[] {
 
 // The controls of section 6 step 5 of the analysis (NC1, NC2, NC3, NC4, NC5, NC9, NC11, NC12', NC13', NC14, NC15). NC3 is equivalent (silent).
 const CONTROLS: Control[] = [
-  { id: "NC1", what: "isLast forced to true (assemble)", file: "assemble.ts", from: "      isLast: nextT[i] < 0,", to: "      isLast: true,", expect: "caught", note: "witnesses (isLast), edits (channel child)" },
+  // Milestone C (C1): isFirst and isLast are no fields; NC1 is anchored on the root's LastChild link of the render phase (isLast is next < 0).
+  {
+    id: "NC1",
+    what: "isLast forced to true: the root's LastChild is never barriered (sandbox render)",
+    file: "sandbox.ts",
+    from: "    if (ctx.next >= 0) {\n      tree.Root!.LastChild",
+    to: "    if (false) {\n      tree.Root!.LastChild",
+    expect: "caught",
+    note: "witnesses (isLast, as next), edits (channel child)",
+  },
   { id: "NC2", what: "prev forced to -1 (assemble)", file: "assemble.ts", from: "      prev: prevT[i],", to: "      prev: -1,", expect: "caught", note: "witnesses (prev), edits (channel child)" },
-  { id: "NC3", what: "next forced to -1 (assemble)", file: "assemble.ts", from: "      next: nextT[i],", to: "      next: -1,", expect: "silent", note: "equivalent: isLast carries the information (analysis 2; not caught by design)" },
+  {
+    id: "NC3",
+    what: "next forced to -1 for the Next stub of the last node only (sandbox render)",
+    file: "sandbox.ts",
+    from: "last.Next = ctx.next < 0 ? null : astStub(ctx.next);",
+    to: "last.Next = null;",
+    expect: "silent",
+    note: "equivalent: next is read only through withoutKramdownBlockIAL, which short-circuits (analysis 2; not caught by design)",
+  },
   { id: "NC4", what: "domNext forced to -1 (assemble)", file: "assemble.ts", from: "      domNext: domN[i],", to: "      domNext: -1,", expect: "caught", note: "witnesses (domNext), edits (channel child)" },
   {
     id: "NC5",
-    what: "NextSibling guard does not record domNext (sandbox)",
-    file: "sandbox.ts",
-    from: '      record("domNext", ctx.domNext);\n    }\n    return ctx.domNext < 0 ? null : domStub(ctx.domNext, ctx.domNextAttrs);',
-    to: "    }\n    return ctx.domNext < 0 ? null : domStub(ctx.domNext, ctx.domNextAttrs);",
+    what: "domNext left out of contextKey (piece.ts; redefined in milestone C, C1: there is no read recording any more)",
+    file: "piece.ts",
+    from: "${c.domPrev},${c.domNext},${c.domNextAttrs}",
+    to: "${c.domPrev},${c.domNextAttrs}",
     expect: "caught",
-    note: "context_channels pinned domNext witness; witnesses (domNext)",
+    note: "context_channels pinned domNext witness and REAL domNext search (the key no longer separates the variants)",
   },
   { id: "NC9", what: "TrimSpaceAll replay does not trim (assemble)", file: "assemble.ts", from: "R.trimWriterTo(bytes.TrimSpace(R.Writer.Bytes()));", to: "R.trimWriterTo(R.Writer.Bytes());", expect: "caught", note: "fuzz and regressions (the repro scripts test the prototype, not run here)" },
   {
     id: "NC11",
     what: "variant match always takes variants[0] (assemble)",
     file: "assemble.ts",
-    from: "let v = e.variants.find((x) => matches(x, ctx));",
+    from: "let v = e.variants.find((x) => x.key === key);",
     to: "let v = e.variants[0];",
     expect: "caught",
     note: "fuzz (variants of one child with different contexts)",
@@ -93,7 +110,15 @@ const CONTROLS: Control[] = [
   { id: "NC12'", what: "coalesce hoists the barrier operations and merges across them (sandbox)", file: "sandbox.ts", from: "export function coalesce(ops: RootOp[]): RootOp[] {", to: "export function coalesce(ops: RootOp[]): RootOp[] {\n  return coalesceHoist(ops);", append: HOIST, expect: "caught", note: "piece_assembly, dom2md_incremental, fuzz (replaced NC12: equivalent)" },
   { id: "NC13'", what: "closeDocumentWriter replaced by a trim of LF only (assemble)", file: "assemble.ts", from: "closeDocumentWriter(R);", to: 'R.trimWriterTo(bytes.Trim(R.Writer.Bytes(), "\\n")); R.WriteByte(10);', expect: "caught", note: "piece_assembly, dom2md_incremental (footnotes blocks end in a four-space line)" },
   { id: "NC14", what: "generated-id refusal removed (sandbox)", file: "sandbox.ts", from: "if (text.includes(GENERATED_ID)) {", to: "if (false) {", expect: "caught", note: "context_channels NC14 unit test only (the fuzz normalises IDs)" },
-  { id: "NC15", what: "lastOut accessor returns 10 when not assigned (sandbox)", file: "sandbox.ts", from: "      return value;\n    },\n    set(v: number): void {", to: "      return assigned ? value : 10;\n    },\n    set(v: number): void {", expect: "caught", note: "context_channels pinned lastOut witness only (no document shows it)" },
+  {
+    id: "NC15",
+    what: "the render starts at LF whatever lastOut the key has (sandbox render; redefined in milestone C, C1: the accessor is gone)",
+    file: "sandbox.ts",
+    from: "  r.LastOut = ctx.lastOut;",
+    to: "  r.LastOut = 10;",
+    expect: "caught",
+    note: "context_channels pinned lastOut witness only (no document shows it)",
+  },
 ];
 
 const BASELINE: Control = { id: "none", what: "no change (the copy must be green)", file: "", from: "", to: "", expect: "silent", note: "baseline" };

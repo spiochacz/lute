@@ -9,7 +9,7 @@ import * as ast from "../../src/ast/index.ts";
 import * as html from "../../src/html/index.ts";
 import { New } from "../../src/index.ts";
 import type { Lute } from "../../src/index.ts";
-import { astStub, barrierStub, domStub, guard } from "../../src/incremental/barrier.ts";
+import { astStub, barrierStub, domStub } from "../../src/incremental/barrier.ts";
 
 function violation(fn: () => unknown): string {
   try {
@@ -21,19 +21,8 @@ function violation(fn: () => unknown): string {
   assert.fail("expected a BarrierViolation");
 }
 
-test("guard: the getter gives the value read(backing), the setter replaces the backing value", () => {
-  const o = { a: 1 };
-  guard(o, "a", (b) => b * 10);
-  assert.equal(o.a, 10);
-  o.a = 4;
-  assert.equal(o.a, 40);
-  const desc = Object.getOwnPropertyDescriptor(o, "a");
-  assert.equal(desc?.enumerable, true);
-  assert.equal(desc?.configurable, true);
-});
-
-test("domStub answers DataAtom, Type and Attr", () => {
-  const s = domStub(22020, 3);
+test("domStub answers DataAtom, Type and Attr (a next sibling with attrs)", () => {
+  const s = domStub(22020, 3, "next");
   assert.equal(s.DataAtom, 22020);
   assert.equal(s.Type, html.ElementNode);
   assert.equal(s.Attr.length, 3);
@@ -41,10 +30,17 @@ test("domStub answers DataAtom, Type and Attr", () => {
 });
 
 test("domStub throws BarrierViolation with the site for any other property, and for writes", () => {
-  const s = domStub(10244, 0);
+  const s = domStub(10244, 0, "next");
   assert.equal(violation(() => s.Data), "dom.next.Data");
   assert.equal(violation(() => s.FirstChild), "dom.next.FirstChild");
   assert.equal(violation(() => (s.DataAtom = 1)), "dom.next.=DataAtom");
+});
+
+test("domStub of a previous sibling (attrs null) throws on Attr: nothing may read the attributes of the previous sibling", () => {
+  const p = domStub(atom.P, null, "prev");
+  assert.equal(p.DataAtom, atom.P);
+  assert.equal(violation(() => p.Attr), "dom.prev.Attr");
+  assert.equal(violation(() => p.Data), "dom.prev.Data");
 });
 
 test("astStub answers Type, passes methods of ast.Node through, and throws for other properties", () => {
@@ -77,36 +73,35 @@ import { FormatRenderer } from "../../src/render/types.ts";
 import * as atom from "../../src/html/atom/index.ts";
 import { Lute as LuteClass } from "../../src/types.ts";
 
-const LUTE_CTX: Context = { lastOut: 10, prev: -1, next: -1, isFirst: true, isLast: true, domPrev: -1, domNext: -1, domNextAttrs: 0 };
+const LUTE_CTX: Context = { lastOut: 10, prev: -1, next: -1, domPrev: -1, domNext: -1, domNextAttrs: 0 };
 const LUTE: Lute = New();
 
-function readKeysOf(v: { readKeys: string[] } | null): string[] {
-  return v === null ? [] : v.readKeys;
-}
-
-test("8.2.3 prev: a NewlineIfNotLF before the first Append only when the previous node is not a block", () => {
+test("8.2.3 prev: a NewlineIfNotLF before the first Append only when the previous node is not a block (keyed by prev)", () => {
   const bq = '<blockquote data-block="0"><p data-block="0">x</p></blockquote>';
-  const afterText = runChild(LUTE, WYSIWYG_ADAPTER, bq, { ...LUTE_CTX, prev: ast.NodeText, isFirst: false }, { certify: true, opaque: false });
-  const afterPara = runChild(LUTE, WYSIWYG_ADAPTER, bq, { ...LUTE_CTX, prev: ast.NodeParagraph, isFirst: false }, { certify: true, opaque: false });
+  const ctxText: Context = { ...LUTE_CTX, prev: ast.NodeText };
+  const ctxPara: Context = { ...LUTE_CTX, prev: ast.NodeParagraph };
+  const afterText = runChild(LUTE, WYSIWYG_ADAPTER, bq, ctxText, { certify: true, opaque: false });
+  const afterPara = runChild(LUTE, WYSIWYG_ADAPTER, bq, ctxPara, { certify: true, opaque: false });
   assert.equal(afterText.refusal, null, JSON.stringify(afterText.refusal));
   assert.equal(afterPara.refusal, null, JSON.stringify(afterPara.refusal));
-  assert.ok(readKeysOf(afterText.variant).includes("prev"));
+  assert.notEqual(afterText.variant!.key, afterPara.variant!.key, "prev is part of the key");
   assert.equal(afterText.variant!.ops[0].kind, "NewlineIfNotLF");
   assert.notEqual(afterPara.variant!.ops[0].kind, "NewlineIfNotLF");
 });
 
-test("8.2.4 domNext: a br before ul changes the output; a ul child never reads domNext", () => {
+test("8.2.4 domNext: a br before ul changes the output (keyed by domNext); a ul child's output does not depend on domNext", () => {
   const p = '<p data-block="0">a<br>b</p>';
   const beforeUl = runChild(LUTE, WYSIWYG_ADAPTER, p, { ...LUTE_CTX, domNext: atom.Ul, domNextAttrs: 1 }, { certify: true, opaque: false });
   const beforeP = runChild(LUTE, WYSIWYG_ADAPTER, p, { ...LUTE_CTX, domNext: atom.P, domNextAttrs: 0 }, { certify: true, opaque: false });
   assert.equal(beforeUl.refusal, null, JSON.stringify(beforeUl.refusal));
   assert.equal(beforeP.refusal, null, JSON.stringify(beforeP.refusal));
-  assert.ok(readKeysOf(beforeUl.variant).includes("domNext"));
+  assert.notEqual(beforeUl.variant!.key, beforeP.variant!.key);
   assert.notDeepEqual(beforeUl.variant!.ops, beforeP.variant!.ops);
   const ul = '<ul data-tight="true" data-marker="*" data-block="0"><li data-marker="*">x</li></ul>';
   const ulNext = runChild(LUTE, WYSIWYG_ADAPTER, ul, { ...LUTE_CTX, domNext: atom.Ul, domNextAttrs: 0 }, { certify: true, opaque: false });
+  const ulP = runChild(LUTE, WYSIWYG_ADAPTER, ul, { ...LUTE_CTX, domNext: atom.P, domNextAttrs: 0 }, { certify: true, opaque: false });
   assert.equal(ulNext.refusal, null, JSON.stringify(ulNext.refusal));
-  assert.equal(readKeysOf(ulNext.variant).includes("domNext"), false, "the covered merge read is not recorded");
+  assert.deepEqual(ulNext.variant!.ops, ulP.variant!.ops, "the covered merge read does not change the log of a ul");
 });
 
 // Violations (item 5): each patches one engine function with a read outside the declared context, runs the child, and restores it.
@@ -134,7 +129,7 @@ test("8.2.5a a read of a neighbour's field (Previous.Tokens) throws BarrierViola
         return orig.call(this, node, entering) as ast.WalkStatus;
       },
     () => {
-      const r = runChild(LUTE, WYSIWYG_ADAPTER, '<p data-block="0">x</p>', { ...LUTE_CTX, prev: ast.NodeText, isFirst: false }, { certify: true, opaque: false });
+      const r = runChild(LUTE, WYSIWYG_ADAPTER, '<p data-block="0">x</p>', { ...LUTE_CTX, prev: ast.NodeText }, { certify: true, opaque: false });
       assert.deepEqual(r.refusal, { kind: "inconsistency", reason: "barrier:ast.neighbour.Tokens" });
     },
   );

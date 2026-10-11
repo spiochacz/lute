@@ -1,8 +1,9 @@
 // New in the TypeScript port: no Go counterpart, not part of the 1:1 port (ts/PORTING.md, "Code without a Go counterpart"). Per-child cache for VditorDOM2Md / VditorIRDOM2Md: tasks/004-incremental-and-fast-paths.md, "Milestone B specification".
 
-// The sandbox (section 3): one top-level child runs alone, from its string to its root-writer log. The DOM passes are driven one by one
-// (3.2), the child's genAST runs with the DOM barrier armed (3.3), the tree is adjusted by the engine's own walk, and the render phase
-// records the operations on the root writer with the context reads of section 2 (3.4).
+// The sandbox (section 3): one top-level child runs alone, from its string to its root-writer log. Milestone C (C1 and C2): the run is three
+// phases, analyse (parse, certificate, passes 1-3), build (the DOM neighbours are linked by stubs, passes 4-15, genAST, adjustTree) and
+// render (the AST neighbours are linked by stubs, the recording render). The variant key is the whole context (contextKey), so no read
+// is recorded. runChild is the composition of the three phases for one context.
 
 import * as ast from "../ast/index.ts";
 import * as atom from "../html/atom/index.ts";
@@ -18,9 +19,9 @@ import type { Lute } from "../types.ts";
 import { vditorDOM2MdAdjustTree, vditorDOM2MdPreprocess, vditorDOM2MdRenderOptions } from "../vditor_wysiwyg.ts";
 import { vditorIRDOM2MdAdjustTree, vditorIRDOM2MdPreprocess, vditorIRDOM2MdRenderOptions } from "../vditor_ir.ts";
 import type { Options as RenderOptions } from "../render/renderer.ts";
-import { IncrementalInconsistency, BarrierViolation, LASTOUT_PASS } from "./piece.ts";
-import type { ChildInfo, Context, Mode, ReadKey, Refusal, Variant } from "./piece.ts";
-import { astStub, barrierStub, domStub, guard, guardAst } from "./barrier.ts";
+import { IncrementalInconsistency, BarrierViolation, contextKey } from "./piece.ts";
+import type { ChildInfo, Context, Mode, Refusal, Variant } from "./piece.ts";
+import { astStub, barrierStub, domStub } from "./barrier.ts";
 import { certify, bodyOf, parseWithBoundary } from "./parser_certificate.ts";
 
 // The fixed ID that SetTesting(true) gives every generated node ID (section 3.6, S15).
@@ -60,28 +61,28 @@ export const IR_ADAPTER: ModeAdapter = {
 };
 
 // The DOM passes of adjustVditorDOM (vditor_wysiwyg.ts), in the engine's order (section 3.2). scope "root" passes take the root (the body),
-// "child" passes take the child (the first child of the root; removeWbr is called with root.FirstChild as the engine does).
-// armed: the DOM barrier is on during the pass; covered: the reads of the pass are answered but not recorded (mergeVditorDOMList0, 3.5).
-export const ADJUST_PASSES: Array<{ name: string; scope: "root" | "child"; armed: boolean; covered: boolean }> = [
-  { name: "removeEmptyNodes", scope: "root", armed: false, covered: false },
-  { name: "removeHighlightJSSpans", scope: "root", armed: false, covered: false },
-  { name: "removeWbr", scope: "child", armed: false, covered: false },
-  { name: "mergeVditorDOMList0", scope: "child", armed: true, covered: true },
-  { name: "adjustVditorDOMListTight0", scope: "child", armed: true, covered: false },
-  { name: "adjustVditorDOMListList", scope: "child", armed: true, covered: false },
-  { name: "adjustVditorDOMListItemInP", scope: "child", armed: true, covered: false },
-  { name: "removeCodeCode", scope: "child", armed: true, covered: false },
-  { name: "adjustVditorDOMCodeA", scope: "child", armed: true, covered: false },
-  { name: "adjustTag", scope: "child", armed: true, covered: false },
-  { name: "mergeSameStrong", scope: "child", armed: true, covered: false },
-  { name: "adjustTableCode", scope: "child", armed: true, covered: false },
-  { name: "adjustMath", scope: "child", armed: true, covered: false },
-  { name: "adjustNoscriptImg", scope: "child", armed: true, covered: false },
-  { name: "adjustBlockInTable", scope: "child", armed: true, covered: false },
+// "child" passes take the child (the first child of the root; removeWbr is called with root.FirstChild as the engine does). The first
+// three passes run before the DOM neighbours are linked (phase analyse); passes 4 to 15 run with the links in place (phase build).
+export const ADJUST_PASSES: Array<{ name: string; scope: "root" | "child" }> = [
+  { name: "removeEmptyNodes", scope: "root" },
+  { name: "removeHighlightJSSpans", scope: "root" },
+  { name: "removeWbr", scope: "child" },
+  { name: "mergeVditorDOMList0", scope: "child" },
+  { name: "adjustVditorDOMListTight0", scope: "child" },
+  { name: "adjustVditorDOMListList", scope: "child" },
+  { name: "adjustVditorDOMListItemInP", scope: "child" },
+  { name: "removeCodeCode", scope: "child" },
+  { name: "adjustVditorDOMCodeA", scope: "child" },
+  { name: "adjustTag", scope: "child" },
+  { name: "mergeSameStrong", scope: "child" },
+  { name: "adjustTableCode", scope: "child" },
+  { name: "adjustMath", scope: "child" },
+  { name: "adjustNoscriptImg", scope: "child" },
+  { name: "adjustBlockInTable", scope: "child" },
 ];
 
 // SandboxRenderer is the recording renderer of a sandbox run. Its Newline at the root writes nothing and does not read LastOut
-// (section 2.2): the replay decides the newline. A nested Newline reads LastOut (the accessor of the run records the read).
+// (section 2.2): the replay decides the newline. A nested Newline reads LastOut, which is the entry value of the run (the key has it).
 export class SandboxRenderer extends RecordingFormatRenderer {
   Newline(): void {
     const r = this;
@@ -111,10 +112,47 @@ export interface RunResult {
   refusal: Refusal | null;
 }
 
+// The DOM context of a child: the neighbours' atoms and the attribute count of the next one (the covered merge read).
+export interface DomCtx {
+  domPrev: number;
+  domNext: number;
+  domNextAttrs: number;
+}
+
+// A child between the phases of one call (milestone C, C2). It holds DOM nodes, so it lives only inside one call (invariant I3).
+export interface Handle {
+  root: html.Node; // the body of the child's own parse
+  child: html.Node; // root.FirstChild, the child itself
+  atomMerge: number; // DataAtom before the merge pass
+  attrsMerge: number; // Attr.length before the merge pass
+}
+
+export type Analysis = { kind: "refused"; refusal: Refusal } | { kind: "dead"; atom: number } | { kind: "alive"; handle: Handle };
+
+export interface Built {
+  info: ChildInfo; // context-free; topTypes come from the tree of the build
+  tree: parse.Tree;
+  tops: ast.Node[]; // the top-level AST nodes of the child
+  tipOpen: boolean; // tree.Context.Tip is not the root after genAST
+}
+
+export type Rendered = { variant: Variant } | { refusal: Refusal };
+
 // callPass calls one DOM pass of the engine by name on the given node, with the engine's own method.
 function callPass(lute: Lute, name: string, node: html.Node): void {
   const f = (lute as unknown as Record<string, (n: html.Node) => void>)[name];
   f.call(lute, node);
+}
+
+// withTesting runs f with the testing flag of the node IDs on (section 3.6, S15), and restores the caller's flag, also on a throw.
+export function withTesting<T>(f: () => T): T {
+  const was = ast.GetTesting();
+  ast.SetTesting(true);
+  try {
+    return f();
+  } finally {
+    ast.SetTesting(was);
+  }
 }
 
 // coalesce merges adjacent Append operations with the same setsLastOut and drops empty ones (section 2.3).
@@ -139,7 +177,9 @@ export function coalesce(ops: RootOp[]): RootOp[] {
   return out;
 }
 
-function classify(e: unknown): Refusal {
+// classify maps an exception of a phase to a refusal: a barrier violation or an inconsistency is an inconsistency, any other exception
+// is engine-threw (section 6).
+export function classify(e: unknown): Refusal {
   if (e instanceof BarrierViolation) {
     return { kind: "inconsistency", reason: "barrier:" + e.site };
   }
@@ -149,31 +189,18 @@ function classify(e: unknown): Refusal {
   return { kind: "unsupported", reason: "engine-threw" };
 }
 
-// runChild runs one child alone (section 3). It never throws: a barrier violation or an internal inconsistency is returned as an
-// inconsistency refusal, any other exception as engine-threw. The testing flag is on for the whole run (3.6).
-export function runChild(lute: Lute, adapter: ModeAdapter, htmlStr: string, ctx: Context, opts: RunOptions): RunResult {
-  const was = ast.GetTesting();
-  ast.SetTesting(true);
-  try {
-    return runChildInner(lute, adapter, htmlStr, ctx, opts);
-  } catch (e) {
-    return { info: null, variant: null, refusal: classify(e) };
-  } finally {
-    ast.SetTesting(was);
-  }
-}
-
-function runChildInner(lute: Lute, adapter: ModeAdapter, htmlStr: string, ctx: Context, opts: RunOptions): RunResult {
-  // (1) the DOM
+// analyse is the first phase: the DOM of the child (parsed with the certificate when doCertify), passes 1 to 3. It returns the handle,
+// or a refusal (certificate), or "dead" (removeEmptyNodes removed the child). It does not link any neighbour.
+export function analyse(lute: Lute, htmlStr: string, doCertify: boolean, opaque: boolean): Analysis {
   let body: html.Node | null;
-  if (opts.certify) {
+  if (doCertify) {
     const p = parseWithBoundary(htmlStr);
     const failed = certify(htmlStr, p.doc, p.boundary);
     if (failed !== null) {
-      const refusal: Refusal = opts.opaque
+      const refusal: Refusal = opaque
         ? { kind: "unsupported", reason: "cert:opaque-preview" }
         : { kind: "inconsistency", reason: "cert:scanner-accepted-certificate-refused" };
-      return { info: null, variant: null, refusal };
+      return { kind: "refused", refusal };
     }
     body = bodyOf(p.doc);
   } else {
@@ -185,141 +212,79 @@ function runChildInner(lute: Lute, adapter: ModeAdapter, htmlStr: string, ctx: C
   const root: html.Node = body;
   const child: html.Node = body.FirstChild;
   const atomBefore = child.DataAtom;
-
-  // The reads of the run, in order of first read (2.1).
-  const reads = new Map<ReadKey, number | boolean>();
-  const record = (key: ReadKey, value: number | boolean): void => {
-    if (!reads.has(key)) {
-      reads.set(key, value);
-    }
-  };
-
-  // (2) the DOM guards (3.3)
-  const dom = { armed: false, covered: false };
-  guard(child, "PrevSibling", (backing: html.Node | null): html.Node | null => {
-    if (!dom.armed || backing !== null) {
-      return backing;
-    }
-    record("domPrev", ctx.domPrev);
-    return ctx.domPrev < 0 ? null : domStub(ctx.domPrev, 0);
-  });
-  guard(child, "NextSibling", (backing: html.Node | null): html.Node | null => {
-    if (!dom.armed || backing !== null) {
-      return backing;
-    }
-    if (!dom.covered) {
-      record("domNext", ctx.domNext);
-    }
-    return ctx.domNext < 0 ? null : domStub(ctx.domNext, ctx.domNextAttrs);
-  });
-  guard(root, "FirstChild", (backing: html.Node | null): html.Node | null => {
-    if (!dom.armed) {
-      return backing;
-    }
-    record("domPrev", ctx.domPrev);
-    return ctx.domPrev < 0 ? backing : (barrierStub("dom.root.FirstChild") as html.Node);
-  });
-  guard(root, "LastChild", (backing: html.Node | null): html.Node | null => {
-    if (!dom.armed) {
-      return backing;
-    }
-    if (!dom.covered) {
-      record("domNext", ctx.domNext);
-    }
-    return ctx.domNext < 0 ? backing : (barrierStub("dom.root.LastChild") as html.Node);
-  });
-
-  // (3) the passes, in the engine's order, with the checks of 3.2
   callPass(lute, "removeEmptyNodes", root);
   if (root.FirstChild === null) {
-    return { info: { alive: false, atom: atomBefore, attrs: 0, topTypes: [] }, variant: null, refusal: null };
+    return { kind: "dead", atom: atomBefore };
   }
   callPass(lute, "removeHighlightJSSpans", root);
   if (root.FirstChild !== null) {
     callPass(lute, "removeWbr", root.FirstChild);
   }
-  const atomMerge = child.DataAtom;
-  const attrsMerge = child.Attr.length;
-  for (const pass of ADJUST_PASSES.slice(3)) {
-    dom.armed = pass.armed;
-    dom.covered = pass.covered;
-    try {
-      callPass(lute, pass.name, child);
-    } finally {
-      dom.armed = false;
-      dom.covered = false;
-    }
-  }
-  if (root.FirstChild !== child || child.PrevSibling !== null || child.NextSibling !== null) {
-    throw new IncrementalInconsistency("sibling-structure-changed", "a DOM pass inserted or removed a top-level node");
-  }
-  const atomFinal = child.DataAtom;
-  if (atomFinal !== atomMerge) {
-    throw new IncrementalInconsistency("top-level-atom-changed", `DataAtom ${atomMerge} then ${atomFinal}`);
-  }
+  return { kind: "alive", handle: { root, child, atomMerge: child.DataAtom, attrsMerge: child.Attr.length } };
+}
 
-  // (4) genAST with the barrier armed (genAST is called for the child only, as a sandbox run of one child)
+// build is the second phase: the DOM neighbours are linked (plain assignments, milestone C C1), passes 4 to 15 run with the links in
+// place, then genAST of the child, the tip check and adjustTree. The caller runs it inside withTesting.
+export function build(lute: Lute, adapter: ModeAdapter, h: Handle, dom: DomCtx): Built {
+  const { root, child } = h;
+  if (root.FirstChild !== child || child.PrevSibling !== null || child.NextSibling !== null) {
+    throw new IncrementalInconsistency("sibling-structure-changed", "a DOM pass before the links inserted or removed a top-level node");
+  }
+  const prevStub = dom.domPrev < 0 ? null : domStub(dom.domPrev, null, "prev");
+  const nextStub = dom.domNext < 0 ? null : domStub(dom.domNext, dom.domNextAttrs, "next");
+  child.PrevSibling = prevStub;
+  child.NextSibling = nextStub;
+  if (prevStub !== null) {
+    root.FirstChild = barrierStub("dom.root.FirstChild") as html.Node;
+  }
+  if (nextStub !== null) {
+    root.LastChild = barrierStub("dom.root.LastChild") as html.Node;
+  }
+  const linkedFirst = root.FirstChild;
+  const linkedLast = root.LastChild;
+  for (const pass of ADJUST_PASSES.slice(3)) {
+    callPass(lute, pass.name, child);
+  }
+  if (root.FirstChild !== linkedFirst || root.LastChild !== linkedLast || child.PrevSibling !== prevStub || child.NextSibling !== nextStub) {
+    throw new IncrementalInconsistency("sibling-structure-changed", "a DOM pass changed the top-level links");
+  }
+  if (child.DataAtom !== h.atomMerge) {
+    throw new IncrementalInconsistency("top-level-atom-changed", `DataAtom ${h.atomMerge} then ${child.DataAtom}`);
+  }
   const tree = new parse.Tree();
   tree.Name = "";
   tree.Root = new ast.Node(ast.NodeDocument);
   tree.Context = new parse.Context(lute.ParseOptions);
   tree.Context.Tip = tree.Root;
-  dom.armed = true;
-  dom.covered = false;
-  try {
-    adapter.genAST(lute, child, tree);
-  } finally {
-    dom.armed = false;
-  }
+  adapter.genAST(lute, child, tree);
   const tipOpen = tree.Context!.Tip !== tree.Root;
   adapter.adjustTree(tree);
   const tops: ast.Node[] = [];
   for (let c = tree.Root!.FirstChild; c !== null; c = c.Next) {
     tops.push(c);
   }
-  const info: ChildInfo = { alive: true, atom: atomFinal, attrs: attrsMerge, topTypes: tops.map((n) => n.Type) };
-  if (tipOpen) {
-    return { info, variant: null, refusal: { kind: "unsupported", reason: "tip-open" } };
-  }
+  const info: ChildInfo = { alive: true, atom: h.atomMerge, attrs: h.attrsMerge, topTypes: tops.map((n) => n.Type) };
+  return { info, tree, tops, tipOpen };
+}
 
-  // (5) the render phase (3.4)
-  const r = newSandboxRenderer(tree, adapter.renderOptions(), lute.ParseOptions);
-  let value = ctx.lastOut;
-  let assigned = false;
-  Object.defineProperty(r, "LastOut", {
-    configurable: true,
-    enumerable: true,
-    get(): number {
-      if (!assigned) {
-        record("lastOut", ctx.lastOut);
-      }
-      return value;
-    },
-    set(v: number): void {
-      assigned = true;
-      value = v;
-    },
-  });
+// render is the third phase: the AST neighbours are linked from prev and next (isFirst and isLast are prev < 0 and next < 0, invariant I1),
+// the recording renderer runs with LastOut = ctx.lastOut, and the root-writer log is coalesced. The caller runs it inside withTesting.
+export function render(lute: Lute, adapter: ModeAdapter, b: Built, ctx: Context): Rendered {
+  const { tree, tops } = b;
   if (tops.length > 0) {
     const first = tops[0];
     const last = tops[tops.length - 1];
-    guardAst(first, "Previous", (): ast.Node | null => {
-      record("prev", ctx.prev);
-      return ctx.prev < 0 ? null : astStub(ctx.prev);
-    });
-    guardAst(last, "Next", (): ast.Node | null => {
-      record("next", ctx.next);
-      return ctx.next < 0 ? null : astStub(ctx.next);
-    });
-    guardAst(tree.Root!, "FirstChild", (): ast.Node | null => {
-      record("isFirst", ctx.isFirst);
-      return ctx.isFirst ? first : (barrierStub("ast.root.FirstChild") as ast.Node);
-    });
-    guardAst(tree.Root!, "LastChild", (): ast.Node | null => {
-      record("isLast", ctx.isLast);
-      return ctx.isLast ? last : (barrierStub("ast.root.LastChild") as ast.Node);
-    });
+    first.Previous = ctx.prev < 0 ? null : astStub(ctx.prev);
+    last.Next = ctx.next < 0 ? null : astStub(ctx.next);
+    if (ctx.prev >= 0) {
+      tree.Root!.FirstChild = barrierStub("ast.root.FirstChild") as ast.Node;
+    }
+    if (ctx.next >= 0) {
+      tree.Root!.LastChild = barrierStub("ast.root.LastChild") as ast.Node;
+    }
   }
+  const r = newSandboxRenderer(tree, adapter.renderOptions(), lute.ParseOptions);
+  r.LastOut = ctx.lastOut;
   const ops: RootOp[] = [];
   r.renderDocument(tree.Root!, true);
   r.sink = ops;
@@ -328,9 +293,7 @@ function runChildInner(lute: Lute, adapter: ModeAdapter, htmlStr: string, ctx: C
   }
   r.sink = null;
   // no renderDocument exit: the document close is the assembly's job (3.4)
-
-  // (6) after the run (3.6)
-  const endLastOut = assigned ? value : LASTOUT_PASS;
+  const endLastOut = r.LastOut;
   const merged = coalesce(ops);
   let text = "";
   let size = 96;
@@ -343,12 +306,37 @@ function runChildInner(lute: Lute, adapter: ModeAdapter, htmlStr: string, ctx: C
     }
   }
   if (text.includes(GENERATED_ID)) {
-    return { info, variant: null, refusal: { kind: "unsupported", reason: "generated-id" } };
+    return { refusal: { kind: "unsupported", reason: "generated-id" } };
   }
-  const readKeys = Array.from(reads.keys());
-  const readVals = readKeys.map((k) => reads.get(k)!);
-  const variant: Variant = { readKeys, readVals, ops: merged, endLastOut, bytes: size };
-  return { info, variant, refusal: null };
+  return { variant: { key: contextKey(ctx), ops: merged, endLastOut, bytes: size } };
+}
+
+// runChild runs one child alone (section 3): analyse, build and render for one context. It never throws: a barrier violation or an
+// internal inconsistency is returned as an inconsistency refusal, any other exception as engine-threw. The testing flag is on for the
+// whole run (3.6).
+export function runChild(lute: Lute, adapter: ModeAdapter, htmlStr: string, ctx: Context, opts: RunOptions): RunResult {
+  return withTesting((): RunResult => {
+    try {
+      const a = analyse(lute, htmlStr, opts.certify, opts.opaque);
+      if (a.kind === "refused") {
+        return { info: null, variant: null, refusal: a.refusal };
+      }
+      if (a.kind === "dead") {
+        return { info: { alive: false, atom: a.atom, attrs: 0, topTypes: [] }, variant: null, refusal: null };
+      }
+      const b = build(lute, adapter, a.handle, ctx);
+      if (b.tipOpen) {
+        return { info: b.info, variant: null, refusal: { kind: "unsupported", reason: "tip-open" } };
+      }
+      const r = render(lute, adapter, b, ctx);
+      if ("refusal" in r) {
+        return { info: b.info, variant: null, refusal: r.refusal };
+      }
+      return { info: b.info, variant: r.variant, refusal: null };
+    } catch (e) {
+      return { info: null, variant: null, refusal: classify(e) };
+    }
+  });
 }
 
 // listCoupling decides whether the engine's mergeVditorDOMList0 would merge two alive children (section 3.5): it runs the pass on a
@@ -379,4 +367,3 @@ export function listCoupling(lute: Lute, infos: ChildInfo[]): boolean {
   }
   return left !== count;
 }
-

@@ -35,7 +35,7 @@ node experiments/dom2md-cache/fuzz.ts --impl=prototype --mode=wysiwyg --cmp=1500
 
 # negative controls: each one is a changed statement of a scratch copy; output is a table
 export D2M_SCRATCH=<a scratch directory>        # default: the OS temp directory, d2m-nc
-node experiments/dom2md-cache/negative-control.ts --jobs=4 --cmp=2000
+node experiments/dom2md-cache/negative-control.ts --jobs=4 --cmp=2000   # the milestone C run used --jobs=3 --cmp=500
 node experiments/dom2md-cache/negative-control.ts --only=NC1,NC2     # a subset (the baseline always runs first)
 ```
 
@@ -64,20 +64,21 @@ The repro scripts (`repro/run.ts`, `repro/sweep.ts`) import the prototype; they 
 
 The controls of `negative-control.ts` (expectations of section 6 step 5 of the analysis). "Caught" means a test of the list above fails or the fuzzer prints a mismatch or an inconsistency for one of the two seeds. The evidence of the last run (table printed by `negative-control.ts`, copy in `$D2M_SCRATCH/summary.json`):
 
-| control | what | expected | observed | caught by (first evidence) |
+| control | what (milestone C anchor) | expected | observed | caught by (first evidence, cmp 500, seeds 1-2) |
 |---|---|---|---|---|
-| NC1 isLast forced true | assemble.ts | caught | caught | witnesses; fuzz 3842 mismatches (both modes, seeds 1-2) |
-| NC2 prev forced -1 | assemble.ts | caught | caught | witnesses; fuzz 481 mismatches |
-| NC3 next forced -1 | assemble.ts | silent (equivalent) | silent | 0 mismatches, no test fails |
-| NC4 domNext forced -1 | assemble.ts | caught | caught | regressions (p with br before list); fuzz 174 |
-| NC5 domNext not recorded | sandbox.ts | caught | caught | regressions and fuzz (same documents as NC4) |
-| NC9 TrimSpaceAll does not trim | assemble.ts | caught | caught | regressions (U+3000 paragraph); fuzz 2450 (repro scripts are prototype-only, not run) |
-| NC11 variants[0] always | assemble.ts | caught | caught | regressions; fuzz 4923 |
-| NC12' hoist across barriers | sandbox.ts | caught | caught | regressions; fuzz 6230 mismatches and 3166 inconsistencies (replay:lastout-diverged) |
-| NC13' trim LF only | assemble.ts | caught | caught | edit simulation; fuzz 13 (evict pass, leading-go-space) |
-| NC14 generated-id scan removed | sandbox.ts | caught (unit) | caught | context_channels NC14 unit test only |
-| NC15 lastOut returns 10 | sandbox.ts | caught (unit) | caught | context_channels pinned lastOut witness only |
+| NC1 isLast forced true | sandbox render: the root LastChild link is not installed (isLast is next < 0) | caught | caught | 909 fuzz mismatches; witnesses, edit simulation |
+| NC2 prev forced -1 | assemble: ctx prev | caught | caught | 166 mismatches; edit simulation (all six) |
+| NC3 next forced -1 for the Next stub only | sandbox render: last.Next = null | silent (equivalent) | silent | 0 / 0; as analysed (next is read only through a short-circuit) |
+| NC4 domNext forced -1 | assemble: ctx domNext | caught | caught | 30 mismatches; p with br before a list (regressions) |
+| NC5 domNext left out of contextKey | piece.ts: contextKey (redefined: there is no read recording any more) | caught | caught | context_channels pinned domNext witness and REAL search (key no longer separates) |
+| NC9 TrimSpaceAll does not trim | assemble: replay | caught | caught | 587 mismatches; U+3000 regression |
+| NC11 variants[0] always | assemble: lookup by key | caught | caught | regressions, edit simulation |
+| NC12 coalesce hoists barrier ops | sandbox: coalesce | caught | caught | 1608 mismatches and 818 inconsistencies |
+| NC13 closeDocumentWriter trims LF only | assemble: close | caught | caught | 6 mismatches (edit simulation, default) |
+| NC14 generated-id scan removed | sandbox render: text.includes(GENERATED_ID) | caught (unit) | caught | context_channels NC14 unit test only |
+| NC15 render starts at LF | sandbox render: r.LastOut = 10 (redefined: the accessor is gone) | caught (unit) | caught | context_channels pinned lastOut witness only |
 
+Milestone C (C1) changed the anchors: isFirst and isLast are no fields any more, so NC1 moved to the root LastChild link, NC3 to the Next link, NC5 to the key, NC15 to the render start. Baseline (no change) green: 89 tests, 0 mismatches in four fuzz passes.
 
 Controls of the spike (`cached.ts` mutants, `negative-control.ts` before this revision: `constsep`, `trim-parts`, `no-next-bit`, `no-last-bit`, `dom-last`, `raw-neighbours`, `no-adjacent-lists`, `no-fingerprint`, `no-leak-check`, `no-clean-check`, `allow-*`) were run against the prototype. They are not in the engine's table; the prototype's results are in the spike section of `tasks/004`. Their mutants were removed from `negative-control.ts` with the switch to the engine (not kept behind `--impl=prototype`).
 

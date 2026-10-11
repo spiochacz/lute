@@ -3,20 +3,23 @@
 // Each declared context field is COVERED (its reads are recorded and no run reads outside the declared context) and REAL (some child's
 // output depends on it), the latter by witness search (coordinator decision, deviation 8). A field with no witness is reported, not failed.
 //
-// Section 6 step 4 of the 2026-10-11 negative-control analysis: the REAL searches of isFirst, domPrev and lastOut are replaced by cheap
-// assertions (isFirst and domPrev are never read; lastOut is read only after a non-text node). The NC14 unit test (the generated-id scan)
-// is here too. Default run: the COVERED sweep covers every 8th candidate; test:full covers all of them (test/e2e/full.ts).
+// Milestone C, C1 (restated on the key): there is no read recording, so "never read" and "read only after a text node" are checked at the
+// level of the log: a field that a run never reads cannot change its output. isFirst and isLast are no fields any more (invariant I1).
+// The NC14 unit test (the generated-id scan) is here too. Default run: the COVERED sweep covers every 8th candidate; test:full covers all
+// of them (test/e2e/full.ts).
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import * as ast from "../../src/ast/index.ts";
+import * as atom from "../../src/html/atom/index.ts";
 import { New } from "../../src/index.ts";
 import type { Lute } from "../../src/index.ts";
 import { FormatRenderer } from "../../src/render/types.ts";
 import { scanTopLevel } from "../../src/incremental/scanner.ts";
 import { WYSIWYG_ADAPTER, runChild } from "../../src/incremental/sandbox.ts";
+import { contextKey } from "../../src/incremental/piece.ts";
 import { auditDocuments } from "./corpus_docs.ts";
-import { FIELD_VALUES, BASE_CONTEXT, matchesContext, searchWitness, withField } from "./witness.ts";
+import { FIELD_VALUES, BASE_CONTEXT, matchesContext, outcome, searchWitness, withField } from "./witness.ts";
 import { sample } from "../e2e/full.ts";
 
 const BUDGET_MS = 2000;
@@ -61,8 +64,8 @@ test("COVERED: no run of a corpus child under the base context or any single-fie
   process.stdout.write(`COVERED: ${SWEEP.length} of ${CANDIDATES.length} candidates x ${FIELD_VALUES.length} fields x 2 values, no barrier trips\n`);
 });
 
-// The REAL searches: isLast, next, prev and domNext (the isFirst, domPrev and lastOut searches are replaced by the assertions below).
-const SEARCHED = FIELD_VALUES.filter((f) => f.field !== "isFirst" && f.field !== "domPrev" && f.field !== "lastOut");
+// The REAL searches: prev, next and domNext (isLast is next < 0; the lastOut and domPrev searches are replaced by the log-level tests below).
+const SEARCHED = FIELD_VALUES.filter((f) => f.field !== "domPrev" && f.field !== "lastOut");
 for (const spec of SEARCHED) {
   test(`REAL: the output of some child depends on ${spec.field} (witness search, ${CANDIDATES.length} candidates)`, () => {
     const res = searchWitness(lute, WYSIWYG_ADAPTER, spec.field, CANDIDATES, BUDGET_MS);
@@ -73,54 +76,50 @@ for (const spec of SEARCHED) {
     const w = res.witness;
     process.stdout.write(`REAL ${spec.field}: witness after ${res.candidates} candidates: ${JSON.stringify(w.html)} with ${spec.field} ${String(w.a)} vs ${String(w.b)}\n`);
     assert.notEqual(w.outA, w.outB);
-    // the key separates the two variants: the variant recorded under A does not match B
-    const ctxB = withField(spec.field, w.b);
-    const vA = runChild(lute, WYSIWYG_ADAPTER, w.html, withField(spec.field, w.a), { certify: true, opaque: false }).variant;
+    // the key separates the two variants: the variant made under A does not match the context of B
+    const ctxA = withField(spec.field, w.a);
+    const vA = runChild(lute, WYSIWYG_ADAPTER, w.html, ctxA, { certify: true, opaque: false }).variant;
     assert.ok(vA !== null);
-    assert.ok(vA!.readKeys.includes(spec.field), `${spec.field} must be a recorded read of the witness`);
-    assert.equal(matchesContext(vA!, ctxB), false, "the variant of A must not match the context of B");
+    assert.equal(vA!.key, contextKey(ctxA), "the variant is keyed by the whole context");
+    assert.equal(matchesContext(vA!, withField(spec.field, w.b)), false, "the variant of A must not match the context of B");
   });
 }
 
-// Step 4(b): isFirst and domPrev are never read by any candidate, under either value of the field.
-test("isFirst and domPrev: no candidate run records them as a read (the cheap form of the proofs)", () => {
+// domPrev is never read (section 3 of the 2026-10-11 analysis; the proof is the log-level form here): no candidate's outcome depends on it.
+test("domPrev: no candidate's outcome depends on it (the log-level form of 'never read')", () => {
   const offenders: string[] = [];
   for (const html of CANDIDATES) {
-    for (const spec of FIELD_VALUES) {
-      if (spec.field !== "isFirst" && spec.field !== "domPrev") {
-        continue;
-      }
-      for (const v of [spec.a, spec.b]) {
-        const r = runChild(lute, WYSIWYG_ADAPTER, html, withField(spec.field, v), { certify: true, opaque: false });
-        if (r.variant !== null && r.variant.readKeys.includes(spec.field)) {
-          offenders.push(`${spec.field}=${String(v)}: ${html}`);
-        }
-      }
+    const a = outcome(lute, WYSIWYG_ADAPTER, html, withField("domPrev", -1), false);
+    const b = outcome(lute, WYSIWYG_ADAPTER, html, withField("domPrev", atom.P), false);
+    if (a !== b) {
+      offenders.push(`domPrev: ${html}`);
     }
   }
-  assert.deepEqual(offenders, [], "a run read isFirst or domPrev");
+  assert.deepEqual(offenders, [], "a run's outcome depends on domPrev");
 });
 
-// Step 4(c): lastOut is read only when the previous top-level node is not a text node.
-test("lastOut: a run reads it only when prev is not NodeText, for every candidate and every prev", () => {
+// lastOut does not change the log of a child after a text node (the log-level form of "lastOut is read only after a non-text node").
+// Only the operations are compared: endLastOut of a run that writes nothing is the entry value (the renderer's field, milestone C C1), so it
+// follows lastOut by construction and the replay adopts the same value.
+test("lastOut: after a text node no candidate's log depends on lastOut", () => {
   const offenders: string[] = [];
-  const PREVS = [-1, ast.NodeText, ast.NodeParagraph, ast.NodeList];
   for (const html of CANDIDATES) {
-    for (const prev of PREVS) {
-      const r = runChild(lute, WYSIWYG_ADAPTER, html, { ...BASE_CONTEXT, prev }, { certify: true, opaque: false });
-      if (r.variant !== null && r.variant.readKeys.includes("lastOut") && prev === ast.NodeText) {
-        offenders.push(`prev=NodeText: ${html}`);
-      }
+    const a = runChild(lute, WYSIWYG_ADAPTER, html, { ...BASE_CONTEXT, prev: ast.NodeText, lastOut: 10 }, { certify: true, opaque: false });
+    const b = runChild(lute, WYSIWYG_ADAPTER, html, { ...BASE_CONTEXT, prev: ast.NodeText, lastOut: 0x78 }, { certify: true, opaque: false });
+    if (a.variant === null || b.variant === null) {
+      continue;
+    }
+    if (JSON.stringify(a.variant.ops) !== JSON.stringify(b.variant.ops)) {
+      offenders.push(`prev=NodeText: ${html}`);
     }
   }
-  assert.deepEqual(offenders, [], "lastOut read after a text node");
+  assert.deepEqual(offenders, [], "a log depends on lastOut after a text node");
 });
 
 // Pinned witnesses (the fixed test cases of the coordinator's decision): the child, the two values, and the fact that the outcomes differ;
-// the variant recorded under A must not match the context of B.
-const PINNED: Array<{ field: "lastOut" | "isLast" | "prev" | "next" | "domNext"; html: string; a: number | boolean; b: number | boolean }> = [
+// the variant made under A must not match the context of B. isLast is witnessed by next (the table with next -1 against a type).
+const PINNED: Array<{ field: "lastOut" | "prev" | "next" | "domNext"; html: string; a: number | boolean; b: number | boolean }> = [
   { field: "lastOut", html: '<blockquote data-block="0"><h1 data-block="0" id="wysiwyg-Foo" data-marker="#">Foo</h1><p data-block="0">bar\nbaz</p></blockquote>', a: 10, b: 0x78 },
-  { field: "isLast", html: '<table data-block="0"><thead><tr><th>a</th><th>b</th></tr></thead><tbody><tr><td>1</td><td>2</td></tr></tbody></table>', a: true, b: false },
   { field: "prev", html: '<h1 data-block="0" id="wysiwyg-h1" data-marker="#">h1</h1>', a: -1, b: 16 },
   { field: "next", html: '<table data-block="0"><thead><tr><th>a</th><th>b</th></tr></thead><tbody><tr><td>1</td><td>2</td></tr></tbody></table>', a: -1, b: 1 },
   { field: "domNext", html: '<p data-block="0">line1<br />line2<br />line3\nline4</p>', a: -1, b: 42754 },
@@ -133,7 +132,7 @@ for (const p of PINNED) {
     assert.equal(ra.refusal, null, JSON.stringify(ra.refusal));
     assert.equal(rb.refusal, null, JSON.stringify(rb.refusal));
     assert.notDeepEqual(ra.variant!.ops, rb.variant!.ops);
-    assert.ok(ra.variant!.readKeys.includes(p.field));
+    assert.notEqual(ra.variant!.key, rb.variant!.key);
     assert.equal(matchesContext(ra.variant!, withField(p.field, p.b)), false);
   });
 }

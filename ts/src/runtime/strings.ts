@@ -406,6 +406,12 @@ export function TrimSuffix(s: string, suffix: string): string {
 // replaced by new. An empty old inserts new at every rune boundary.
 export function ReplaceAll(s: string, old: string, nw: string): string {
   if (old !== "" && old !== nw) {
+    // PORT-NOTE: perf, departs from 1:1: when old does not occur, split/join
+    // would copy s and give s back; return s itself. Same value: strings are
+    // immutable, and Go's result is equal bytes.
+    if (s.indexOf(old) === -1) {
+      return s;
+    }
     return s.split(old).join(nw);
   }
   return Replace(s, old, nw, -1);

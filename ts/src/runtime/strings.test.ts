@@ -205,6 +205,15 @@ test("Replace with an empty old inserts at every rune boundary, including the en
   assert.equal(S.Replace("ab", "", "X", 0), "ab");
 });
 
+test("ReplaceAll: absent pattern, old equal to new, and empty input give Go's results", () => {
+  // Go: strings.ReplaceAll("abc", "x", "y") == "abc"; "abc" with old == new is unchanged
+  assert.equal(S.ReplaceAll("abc", "x", "y"), "abc");
+  assert.equal(S.ReplaceAll("abc", "b", "b"), "abc");
+  assert.equal(S.ReplaceAll("", "a", "b"), "");
+  assert.equal(S.ReplaceAll("abcb", "b", "X"), "aXcX");
+  assert.equal(S.ReplaceAll("abcb", "bc", ""), "ab");
+});
+
 test("Replacer: first argument wins over longer keys, empty old matches between replacements", () => {
   assert.equal(S.NewReplacer("a", "1", "ab", "2").Replace("abc"), "1bc");
   assert.equal(S.NewReplacer("ab", "2", "a", "1").Replace("abc"), "2c");

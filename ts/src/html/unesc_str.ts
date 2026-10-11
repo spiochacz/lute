@@ -31,12 +31,13 @@ export function UnescapeBytes(tokens: Uint8Array | null): Uint8Array | null {
   // not valid UTF-8 are not kept (conv.StringFromBytes), unlike Go's string(tokens).
   tokens = conv.BytesFromString(HtmlUnescapeString(conv.StringFromBytes(tokens)));
   const length = tokens.length;
+  // PORT-NOTE: pre-sized capacity above 64 bytes is kept (structural change S1): the appends below are slices.AppendInPlaceLikeGo or AppendByteInPlaceLikeGo, the code before S1, so that they write into the pre-sized buffer as Go does.
   ret = slices.Make(0, length);
   for (let i = 0; i < length; i++) {
     if (lex.IsBackslashEscapePunct(tokens, i)) {
       ret = ret.subarray(0, ret.length - 1);
     }
-    ret = slices.AppendByte(ret, tokens[i]);
+    ret = slices.AppendByteInPlaceLikeGo(ret, tokens[i]);
   }
   return ret;
 }

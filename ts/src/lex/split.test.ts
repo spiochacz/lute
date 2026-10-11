@@ -5,8 +5,11 @@ import { IsBackslashEscapePunct, Split, SplitWithoutBackslashEscape } from "./to
 
 // The old byte-by-byte implementations, kept here only as the reference for the
 // new Split and SplitWithoutBackslashEscape. Each element is built with
-// slices.AppendByte, as the code did before the change, so its length, content and
-// capacity are the ones the new code has to reproduce.
+// slices.AppendByteInPlaceLikeGo, which is the code of AppendByte before structural
+// change S1, so its length, content and capacity are the ones of the original.
+// Under S1 the capacity of an element of at most 64 bytes is its length, so for those
+// the test checks exact fit instead of the old capacity; the length and content are
+// compared for every element.
 
 function oldSplit(tokens: Uint8Array, separator: number): Uint8Array[] {
   let ret: Uint8Array[] = [];
@@ -17,7 +20,7 @@ function oldSplit(tokens: Uint8Array, separator: number): Uint8Array[] {
   for (; i < length; i++) {
     token = tokens[i];
     if (separator !== token) {
-      line = slices.AppendByte(line, token);
+      line = slices.AppendByteInPlaceLikeGo(line, token);
       continue;
     }
 
@@ -38,7 +41,7 @@ function oldSplitWithoutBackslashEscape(tokens: Uint8Array, separator: number): 
   for (let i = 0; i < length; i++) {
     token = tokens[i];
     if (separator !== token || IsBackslashEscapePunct(tokens, i)) {
-      line = slices.AppendByte(line, token);
+      line = slices.AppendByteInPlaceLikeGo(line, token);
       continue;
     }
 
@@ -51,14 +54,19 @@ function oldSplitWithoutBackslashEscape(tokens: Uint8Array, separator: number): 
   return ret;
 }
 
-// assertSameElements compares content, length and capacity of every element.
+// assertSameElements compares content and length of every element. An element above 64 bytes also
+// gets the capacity of the old byte-by-byte loop; an element of at most 64 bytes must be exact fit (capacity = length).
 function assertSameElements(got: Uint8Array[], want: Uint8Array[], where: string): void {
   assert.equal(got.length, want.length, `${where}: element count`);
   for (let i = 0; i < want.length; i++) {
     const w = `${where}: element ${i}`;
     assert.equal(Buffer.from(got[i]).toString("hex"), Buffer.from(want[i]).toString("hex"), `${w} content`);
     assert.equal(got[i].length, want[i].length, `${w} length`);
-    assert.equal(slices.Cap(got[i]), slices.Cap(want[i]), `${w} capacity`);
+    if (want[i].length > 64) {
+      assert.equal(slices.Cap(got[i]), slices.Cap(want[i]), `${w} capacity`);
+    } else {
+      assert.equal(slices.Cap(got[i]), got[i].length, `${w} exact-fit capacity`);
+    }
   }
 }
 
@@ -129,6 +137,18 @@ test("Split and SplitWithoutBackslashEscape match the byte-by-byte versions on g
       `SplitWithoutBackslashEscape long ${k}`,
     );
   }
+});
+
+test("elements of at most 64 bytes are exact fit, and elements above 64 bytes keep the old capacity", () => {
+  const short = Split(new TextEncoder().encode("abc|de"), 0x7c);
+  assert.deepEqual(short.map((e) => slices.Cap(e)), [3, 2]);
+  const long = new Uint8Array(200).fill(0x61);
+  long[100] = 0x7c;
+  const parts = Split(long, 0x7c);
+  assert.equal(parts[0].length, 100);
+  assert.equal(slices.Cap(parts[0]), 128);
+  assert.equal(parts[1].length, 99);
+  assert.equal(slices.Cap(parts[1]), 128);
 });
 
 test("an element is a new slice: appending to it does not change the input", () => {

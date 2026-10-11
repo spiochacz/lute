@@ -70,7 +70,9 @@ Tree.prototype.parseCodeSpan = function (this: Tree, block: ast.Node, ctx: Inlin
   if (2 < textTokens.length && lex.ItemSpace === textTokens[0] && lex.ItemSpace === textTokens[textTokens.length - 1] && !lex.IsBlankLine(textTokens)) {
     // If both ends are spaces and the whole line is not blank, strip one space from each end
     // Slice aliasing: openMarker.Tokens is a sub-slice of ctx.tokens whose capacity reaches the following bytes, so this append writes in place into the shared buffer (as in Go)
-    openMarker.Tokens = slices.AppendByte(openMarker.Tokens!, textTokens[0]);
+    // PORT-NOTE: the write lands in ctx.tokens, which other views of the paragraph read, so it uses slices.AppendByteInPlaceLikeGo (the
+    // pre-S1 code, for any length) and not AppendByte: under S1 a backtick run of at most 64 bytes would not write into ctx.tokens.
+    openMarker.Tokens = slices.AppendByteInPlaceLikeGo(openMarker.Tokens!, textTokens[0]);
     closeMarker.Tokens = ctx.tokens.subarray(endPos - 1, endPos + n);
     textTokens = textTokens.subarray(1, textTokens.length - 1);
   }
@@ -154,7 +156,10 @@ Tree.prototype.parseCodeSpan = function (this: Tree, block: ast.Node, ctx: Inlin
               if (0 <= (closeIdx = bytes.Index(ctx.tokens.subarray(endPos + 1), spanCloseIAL))) {
                 let closeIdx2 = 0;
                 if (0 <= (closeIdx2 = bytes.Index(ctx.tokens.subarray(endPos + 1 + closeIdx), closeBrace))) {
-                  ctx.tokens = slices.Append(ctx.tokens.subarray(0, endPos + 1 + closeIdx), ctx.tokens.subarray(endPos + 1 + closeIdx + closeIdx2 + 1));
+                  // PORT-NOTE: Go's delete in place, append(ctx.tokens[:x], ctx.tokens[y:]...), shifts the bytes after x over the bytes it
+                  // removes, in the buffer that other views of the paragraph share. It uses slices.AppendInPlaceLikeGo (the pre-S1 code, for any
+                  // length) so those views see the same bytes as in Go; under S1 a small ctx.tokens would be copied instead.
+                  ctx.tokens = slices.AppendInPlaceLikeGo(ctx.tokens.subarray(0, endPos + 1 + closeIdx), ctx.tokens.subarray(endPos + 1 + closeIdx + closeIdx2 + 1));
                   ctx.tokensLen = ctx.tokens.length;
                 } else {
                   ctx.tokens = bytes.Replace(ctx.tokens, spanClose, new Uint8Array(0), 1);

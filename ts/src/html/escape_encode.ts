@@ -66,11 +66,12 @@ export function EscapeHTML(html: Uint8Array): Uint8Array {
       case lex.ItemAmpersand:
         if (!inited) {
           // Lazy initialization reduces memory allocation, the same below.
+          // PORT-NOTE: pre-sized capacity above 64 bytes is kept (structural change S1): the appends below are slices.AppendInPlaceLikeGo or AppendByteInPlaceLikeGo, the code before S1, so that they write into the pre-sized buffer as Go does.
           ret = slices.Make(0, length + 128);
           inited = true;
         }
-        ret = slices.Append(ret, html.subarray(start, i));
-        ret = slices.Append(ret, amp);
+        ret = slices.AppendInPlaceLikeGo(ret, html.subarray(start, i));
+        ret = slices.AppendInPlaceLikeGo(ret, amp);
         start = i + 1;
         break;
       case lex.ItemLess:
@@ -78,8 +79,8 @@ export function EscapeHTML(html: Uint8Array): Uint8Array {
           ret = slices.Make(0, length + 128);
           inited = true;
         }
-        ret = slices.Append(ret, html.subarray(start, i));
-        ret = slices.Append(ret, lt);
+        ret = slices.AppendInPlaceLikeGo(ret, html.subarray(start, i));
+        ret = slices.AppendInPlaceLikeGo(ret, lt);
         start = i + 1;
         break;
       case lex.ItemGreater:
@@ -87,8 +88,8 @@ export function EscapeHTML(html: Uint8Array): Uint8Array {
           ret = slices.Make(0, length + 128);
           inited = true;
         }
-        ret = slices.Append(ret, html.subarray(start, i));
-        ret = slices.Append(ret, gt);
+        ret = slices.AppendInPlaceLikeGo(ret, html.subarray(start, i));
+        ret = slices.AppendInPlaceLikeGo(ret, gt);
         start = i + 1;
         break;
       case lex.ItemDoublequote:
@@ -96,14 +97,14 @@ export function EscapeHTML(html: Uint8Array): Uint8Array {
           ret = slices.Make(0, length + 128);
           inited = true;
         }
-        ret = slices.Append(ret, html.subarray(start, i));
-        ret = slices.Append(ret, quot);
+        ret = slices.AppendInPlaceLikeGo(ret, html.subarray(start, i));
+        ret = slices.AppendInPlaceLikeGo(ret, quot);
         start = i + 1;
         break;
     }
   }
   if (inited) {
-    ret = slices.Append(ret, html.subarray(start));
+    ret = slices.AppendInPlaceLikeGo(ret, html.subarray(start));
   }
   return ret;
 }
@@ -121,6 +122,7 @@ export function EncodeDestination(rawurl: Uint8Array): Uint8Array {
   // Acknowledgement: https://gitlab.com/golang-commonmark/mdurl
 
   const hexdigit = "0123456789ABCDEF";
+  // PORT-NOTE: pre-sized capacity above 64 bytes is kept (structural change S1): the appends below are slices.AppendInPlaceLikeGo or AppendByteInPlaceLikeGo, the code before S1, so that they write into the pre-sized buffer as Go does.
   let ret: Uint8Array = slices.Make(0, 256);
   let i = 0;
   let token = 0;
@@ -131,30 +133,30 @@ export function EncodeDestination(rawurl: Uint8Array): Uint8Array {
       for (let j = i, n = i + rlen; j < n; j++) {
         const b = rawurl[j];
         token = rawurl[j];
-        ret = slices.AppendByte(ret, 0x25 /* % */);
-        ret = slices.AppendByte(ret, hexdigit.charCodeAt((b >> 4) & 0xf));
-        ret = slices.AppendByte(ret, hexdigit.charCodeAt(b & 0xf));
+        ret = slices.AppendByteInPlaceLikeGo(ret, 0x25 /* % */);
+        ret = slices.AppendByteInPlaceLikeGo(ret, hexdigit.charCodeAt((b >> 4) & 0xf));
+        ret = slices.AppendByteInPlaceLikeGo(ret, hexdigit.charCodeAt(b & 0xf));
       }
     } else if (r === 0x25 /* % */) {
       token = rawurl[i];
       if (i + 2 < rawurl.length && lex.IsHexDigit(rawurl[i + 1]) && lex.IsHexDigit(rawurl[i + 2])) {
-        ret = slices.AppendByte(ret, 0x25 /* % */);
-        ret = slices.AppendByte(ret, lex.TokenToUpper(rawurl[i + 1]));
-        ret = slices.AppendByte(ret, lex.TokenToUpper(rawurl[i + 2]));
+        ret = slices.AppendByteInPlaceLikeGo(ret, 0x25 /* % */);
+        ret = slices.AppendByteInPlaceLikeGo(ret, lex.TokenToUpper(rawurl[i + 1]));
+        ret = slices.AppendByteInPlaceLikeGo(ret, lex.TokenToUpper(rawurl[i + 2]));
         i += 2;
       } else {
-        ret = slices.AppendByte(ret, 0x25 /* % */);
-        ret = slices.AppendByte(ret, 0x32 /* 2 */);
-        ret = slices.AppendByte(ret, 0x35 /* 5 */);
+        ret = slices.AppendByteInPlaceLikeGo(ret, 0x25 /* % */);
+        ret = slices.AppendByteInPlaceLikeGo(ret, 0x32 /* 2 */);
+        ret = slices.AppendByteInPlaceLikeGo(ret, 0x35 /* 5 */);
       }
     } else if (strings.IndexByte("!#$&'()*+,-./0123456789:;=?@ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz~", r) === -1) {
       token = rawurl[i];
-      ret = slices.AppendByte(ret, 0x25 /* % */);
-      ret = slices.AppendByte(ret, hexdigit.charCodeAt((r >> 4) & 0xf));
-      ret = slices.AppendByte(ret, hexdigit.charCodeAt(r & 0xf));
+      ret = slices.AppendByteInPlaceLikeGo(ret, 0x25 /* % */);
+      ret = slices.AppendByteInPlaceLikeGo(ret, hexdigit.charCodeAt((r >> 4) & 0xf));
+      ret = slices.AppendByteInPlaceLikeGo(ret, hexdigit.charCodeAt(r & 0xf));
     } else {
       token = rawurl[i];
-      ret = slices.AppendByte(ret, token);
+      ret = slices.AppendByteInPlaceLikeGo(ret, token);
     }
     i += rlen;
   }

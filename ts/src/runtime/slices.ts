@@ -13,10 +13,67 @@
 //   $calculateNewCapacity), not the Go runtime's growslice size classes, so
 //   capacities after reallocation are not Go's exact values.
 //
-// Port additions (not in Go): CalculateNewCapacity, Reslice, AppendByte, AppendString
+// Size rule (structural change S1, 2026-10-11). The rule is decided from the
+// length alone, so that a small array never needs an ArrayBuffer, and the
+// `.buffer` getter (which materialises an on-heap array in V8) is never read
+// for a small array on the append and make paths.
+//
+// SMALL = 64 bytes.
+//
+// - A small array has length <= 64. Its capacity is its length. It is never
+//   appended in place: Append, AppendByte and AppendString of a small array
+//   return a new exact-fit array new Uint8Array(n), which is on-heap in V8 and
+//   has no ArrayBuffer. Make(len, cap) with cap <= 64 returns new Uint8Array(len).
+// - A large array has length > 64. Its capacity is the buffer tail, as in Go
+//   and as before S1. Append and AppendByte write in place when the result fits
+//   the tail; otherwise they allocate a new ArrayBuffer of
+//   CalculateNewCapacity(newLen, cap) bytes.
+//
+// Transitions:
+// 1. Small a, result newLen > 64: a new ArrayBuffer of
+//    CalculateNewCapacity(newLen, aLen) bytes, where aLen (the small capacity)
+//    is the old capacity. The result is large from then on.
+// 2. Large a, subarray of at most 64 bytes (a small view of a large buffer):
+//    appending never writes into the parent buffer. In Go the append writes into
+//    the parent's spare capacity. This is the one place where S1 removes a byte
+//    write that Go makes, and it is intended.
+// 3. Large a, subarray longer than 64 bytes: stays large, in place when it fits.
+// 4. Append(a, empty) returns a itself, as Go's append with no elements does.
+//    The result therefore shares a buffer with a and is not exact-fit.
+// 5. Make(len, cap) with cap > 64 makes ArrayBuffer(cap) and a view of len.
+//    If len > 64 the capacity is the buffer tail, as before. If len <= 64, plain
+//    Append/AppendByte do NOT keep the capacity: the first append is a small-array
+//    append (rule above), so the result is an exact-fit copy and the buffer is
+//    dropped. Honouring it would need the capacity to be read from the buffer,
+//    which materialises every small on-heap array. So the pre-sized accumulators
+//    of the port (Make(0, cap) followed by appends, cap above 64: EscapeHTML,
+//    EncodeDestination, unesc_str, heading, inline_link, link, file_annotation_ref,
+//    text merge) append with AppendInPlaceLikeGo / AppendByteInPlaceLikeGo, which
+//    keep the capacity at every length, as before S1 (each site has a PORT-NOTE).
+//    Make(0, cap) with cap at most 64 (block_ref) is exact fit and not honoured.
+// 6. Make(len, cap) with cap <= 64 gives capacity len (exact fit).
+// 7. Clone is exact-fit (capacity = length), as before.
+// 8. CapAfterByteAppends(n) is n for n <= 64 (exact-fit appends) and the
+//    growth sequence from 64 above (64 -> 128 -> 256 ...), so for n > 64 it is
+//    the capacity that the old sequence gave.
+//
+// Where Go relies on writing into the spare capacity of a SMALL array (in-place
+// delete and similar), the port calls AppendInPlaceLikeGo or
+// AppendByteInPlaceLikeGo. These are the pre-S1 bodies with no size rule: they
+// use Cap(a) (the buffer tail), so they write in place exactly as Go does.
+//
+// Copy keeps its pre-S1 body (moveBytes). It reads `.buffer` to detect a shared
+// buffer, so it materialises a small on-heap destination or source. Copy is not
+// an S1 entry point.
+//
+// Port additions (not in Go): CalculateNewCapacity, Reslice, AppendByte,
+// AppendString, AppendInPlaceLikeGo, AppendByteInPlaceLikeGo, CapAfterByteAppends
 // are named after their Go equivalents but are helpers of this port.
 
 const encoder = new TextEncoder();
+
+// SMALL is the largest length of a small array (see the size rule above).
+const SMALL = 64;
 
 // Cap returns the capacity of the slice a: the bytes from its start to the end
 // of the underlying ArrayBuffer.
@@ -42,12 +99,18 @@ export function Reslice(a: Uint8Array, len: number): Uint8Array {
 }
 
 // Make returns a zeroed slice of length len with capacity cap.
+// PORT-NOTE: perf, departs from 1:1 (structural change S1): a capacity of at most 64 bytes
+// gives an exact-fit on-heap array with no ArrayBuffer. A larger capacity keeps the ArrayBuffer.
+// The capacity of a result shorter than 65 bytes is not kept for appends, see rule 5.
 export function Make(len: number, cap: number = len): Uint8Array {
   if (!Number.isInteger(len) || len < 0) {
     throw new RangeError("makeslice: len out of range");
   }
   if (!Number.isInteger(cap) || cap < len) {
     throw new RangeError("makeslice: cap out of range");
+  }
+  if (cap <= SMALL) {
+    return new Uint8Array(len);
   }
   return new Uint8Array(new ArrayBuffer(cap), 0, len);
 }
@@ -98,14 +161,103 @@ function moveBytes(dst: Uint8Array, dstOff: number, src: Uint8Array, n: number):
   }
 }
 
-// Append mirrors Go's append(a, b...). When the capacity of a holds the result,
-// b is written into the shared buffer right after a and a view of the same
-// buffer with the larger length is returned. Otherwise a new buffer is
-// allocated and both a and b are copied into it.
-// PORT-NOTE: perf, departs from 1:1: the lengths and the buffer are read once into
-// locals, and moveBytes takes the count, so no subarray view is made for b. The
-// result (length, content, capacity, aliasing) is the same as before.
+// copyIntoFresh copies all of src into dst at dstOff, where dst is a newly
+// allocated array that shares no buffer with src. It reads no `.buffer`, so
+// neither a small source nor a small destination is materialised.
+// PORT-NOTE: perf, departs from 1:1 (structural change S1): used only for fresh destinations.
+function copyIntoFresh(dst: Uint8Array, dstOff: number, src: Uint8Array): void {
+  const n = src.length;
+  if (n <= SHORT_COPY) {
+    for (let k = 0; k < n; k++) {
+      dst[dstOff + k] = src[k];
+    }
+  } else {
+    dst.set(src, dstOff);
+  }
+}
+
+// Append mirrors Go's append(a, b...). See the size rule at the top of the file.
+// A large a whose capacity holds the result gets b written into the shared
+// buffer right after a, and a view of the same buffer with the larger length is
+// returned. Otherwise the result is a new array: exact-fit when it is small,
+// a new ArrayBuffer of the grown capacity when it is large.
+// PORT-NOTE: perf, departs from 1:1 (structural change S1): a small a (length <= 64) is
+// never appended in place, and the result of a small append is an exact-fit on-heap array.
+// Append(a, empty) returns a.
 export function Append(a: Uint8Array, b: Uint8Array): Uint8Array {
+  const aLen = a.length;
+  const bLen = b.length;
+  if (0 === bLen) {
+    return a;
+  }
+  const newLen = aLen + bLen;
+  if (SMALL < aLen) {
+    const buf = a.buffer;
+    const off = a.byteOffset;
+    const cap = buf.byteLength - off; // Cap(a)
+    if (newLen <= cap) {
+      const v = new Uint8Array(buf, off, newLen);
+      // set() copies the source first when both views share a buffer, so the overlap is safe.
+      v.set(b, aLen);
+      return v;
+    }
+    const nv = new Uint8Array(new ArrayBuffer(CalculateNewCapacity(newLen, cap)), 0, newLen);
+    nv.set(a, 0);
+    copyIntoFresh(nv, aLen, b);
+    return nv;
+  }
+  if (newLen <= SMALL) {
+    const v = new Uint8Array(newLen);
+    copyIntoFresh(v, 0, a);
+    copyIntoFresh(v, aLen, b);
+    return v;
+  }
+  const nv = new Uint8Array(new ArrayBuffer(CalculateNewCapacity(newLen, aLen)), 0, newLen);
+  copyIntoFresh(nv, 0, a);
+  copyIntoFresh(nv, aLen, b);
+  return nv;
+}
+
+// AppendByte mirrors Go's append(a, c) for one byte, without allocating a
+// temporary slice. See the size rule at the top of the file.
+// PORT-NOTE: perf, departs from 1:1 (structural change S1): a small a is never appended in
+// place. The result is a new exact-fit array (or a new ArrayBuffer once it passes 64 bytes).
+export function AppendByte(a: Uint8Array, c: number): Uint8Array {
+  const aLen = a.length;
+  const newLen = aLen + 1;
+  if (SMALL < aLen) {
+    const buf = a.buffer;
+    const off = a.byteOffset;
+    const cap = buf.byteLength - off; // Cap(a)
+    if (newLen <= cap) {
+      const v = new Uint8Array(buf, off, newLen);
+      v[aLen] = c;
+      return v;
+    }
+    const nv = new Uint8Array(new ArrayBuffer(CalculateNewCapacity(newLen, cap)), 0, newLen);
+    nv.set(a, 0);
+    nv[aLen] = c;
+    return nv;
+  }
+  if (newLen <= SMALL) {
+    const v = new Uint8Array(newLen);
+    copyIntoFresh(v, 0, a);
+    v[aLen] = c;
+    return v;
+  }
+  const nv = new Uint8Array(new ArrayBuffer(CalculateNewCapacity(newLen, aLen)), 0, newLen);
+  copyIntoFresh(nv, 0, a);
+  nv[aLen] = c;
+  return nv;
+}
+
+// AppendInPlaceLikeGo is Go's append(a, b...) for any size, with no size rule:
+// the capacity is the buffer tail (Cap(a)), and b is written into the shared
+// buffer when the result fits it. It is the code of Append before S1.
+// Use it only where Go writes into the spare capacity of a small slice and that
+// write is observed through another view (see the call sites marked PORT-NOTE).
+// PORT-NOTE: this is the pre-S1 Append, kept for the Go aliasing at those sites.
+export function AppendInPlaceLikeGo(a: Uint8Array, b: Uint8Array): Uint8Array {
   const aLen = a.length;
   const bLen = b.length;
   const newLen = aLen + bLen;
@@ -124,11 +276,10 @@ export function Append(a: Uint8Array, b: Uint8Array): Uint8Array {
   return v;
 }
 
-// AppendByte mirrors Go's append(a, c) for one byte, without allocating a
-// temporary slice.
-// PORT-NOTE: perf, departs from 1:1: the length, buffer and offset are read once, and the
-// copy on growth uses moveBytes, which loops for short slices. The result is the same.
-export function AppendByte(a: Uint8Array, c: number): Uint8Array {
+// AppendByteInPlaceLikeGo is Go's append(a, c) for one byte for any size, with no
+// size rule. It is the code of AppendByte before S1. See AppendInPlaceLikeGo.
+// PORT-NOTE: this is the pre-S1 AppendByte, kept for the Go aliasing at those sites.
+export function AppendByteInPlaceLikeGo(a: Uint8Array, c: number): Uint8Array {
   const aLen = a.length;
   const newLen = aLen + 1;
   const buf = a.buffer;
@@ -148,11 +299,15 @@ export function AppendByte(a: Uint8Array, c: number): Uint8Array {
 
 // CapAfterByteAppends is a port addition. It returns the capacity of a slice that
 // started as new Uint8Array(0) and received n single-byte appends with AppendByte.
-// The capacity changes only when the length passes it, and then becomes
-// CalculateNewCapacity(length, capacity), so the loop jumps from one growth to the
-// next and runs in O(log n).
+// PORT-NOTE: perf, departs from 1:1 (structural change S1): up to 64 bytes the appends
+// are exact-fit, so the capacity is n. Above 64 the capacity is the growth sequence from 64
+// (CalculateNewCapacity(cap + 1, cap) each time the length passes the capacity), so the loop
+// jumps from one growth to the next and runs in O(log n).
 export function CapAfterByteAppends(n: number): number {
-  let cap = 0;
+  if (n <= SMALL) {
+    return n;
+  }
+  let cap = SMALL;
   while (cap < n) {
     cap = CalculateNewCapacity(cap + 1, cap);
   }

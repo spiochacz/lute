@@ -153,6 +153,7 @@ Tree.prototype.parseATXHeading = function (this: Tree): [boolean, Uint8Array, Ui
 
   markers = t.Context!.currentLine.subarray(t.Context!.nextNonspace, t.Context!.nextNonspace + level + 1);
 
+  // PORT-NOTE: pre-sized capacity above 64 bytes is kept (structural change S1): the appends below are slices.AppendInPlaceLikeGo or AppendByteInPlaceLikeGo, the code before S1, so that they write into the pre-sized buffer as Go does.
   content = slices.Make(0, 256);
   [, tokens] = lex.TrimLeft(tokens);
   [, tokens] = lex.TrimLeft(tokens.subarray(level));
@@ -161,7 +162,7 @@ Tree.prototype.parseATXHeading = function (this: Tree): [boolean, Uint8Array, Ui
     if (lex.ItemNewline === token) {
       break;
     }
-    content = slices.AppendByte(content, token);
+    content = slices.AppendByteInPlaceLikeGo(content, token);
   }
   [, content] = lex.TrimRight(content);
   let closingCrosshatchIndex = content.length - 1;

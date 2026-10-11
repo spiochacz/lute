@@ -252,6 +252,7 @@ Context.prototype.parseLinkDest2 = function (this: Context, tokens: Uint8Array):
     return [ret, remains, destination];
   }
 
+  // PORT-NOTE: pre-sized capacity above 64 bytes is kept (structural change S1): the appends below are slices.AppendInPlaceLikeGo or AppendByteInPlaceLikeGo, the code before S1, so that they write into the pre-sized buffer as Go does.
   ret = slices.Make(0, 256);
   destination = slices.Make(0, 256);
 
@@ -261,14 +262,14 @@ Context.prototype.parseLinkDest2 = function (this: Context, tokens: Uint8Array):
   let r = 0;
   while (i < length) {
     const token = tokens[i];
-    ret = slices.AppendByte(ret, token);
+    ret = slices.AppendByteInPlaceLikeGo(ret, token);
     const v = utf8.DecodeRunePacked(tokens, i);
     r = v & 0xFFFFFF;
     size = v >>> 24;
     for (let j = 1; j < size; j++) {
-      ret = slices.AppendByte(ret, tokens[i + j]);
+      ret = slices.AppendByteInPlaceLikeGo(ret, tokens[i + j]);
     }
-    destination = slices.Append(destination, utf8.RuneBytes(r));
+    destination = slices.AppendInPlaceLikeGo(destination, utf8.RuneBytes(r));
     if (lex.IsWhitespace(token) || lex.IsControl(token)) {
       destination = destination.subarray(0, destination.length - 1);
       ret = ret.subarray(0, ret.length - 1);
@@ -313,6 +314,7 @@ Context.prototype.parseLinkDest1 = function (this: Context, tokens: Uint8Array):
     return [ret, remains, destination];
   }
 
+  // PORT-NOTE: pre-sized capacity above 64 bytes is kept (structural change S1): the appends below are slices.AppendInPlaceLikeGo or AppendByteInPlaceLikeGo, the code before S1, so that they write into the pre-sized buffer as Go does.
   ret = slices.Make(0, 256);
   destination = slices.Make(0, 256);
 
@@ -322,16 +324,16 @@ Context.prototype.parseLinkDest1 = function (this: Context, tokens: Uint8Array):
   let r = 0;
   for (; i < length; i += size) {
     const token = tokens[i];
-    ret = slices.AppendByte(ret, token);
+    ret = slices.AppendByteInPlaceLikeGo(ret, token);
     size = 1;
     if (0 < i) {
       const v = utf8.DecodeRunePacked(tokens, i);
       r = v & 0xFFFFFF;
       size = v >>> 24;
       for (let j = 1; j < size; j++) {
-        ret = slices.AppendByte(ret, tokens[i + j]);
+        ret = slices.AppendByteInPlaceLikeGo(ret, tokens[i + j]);
       }
-      destination = slices.Append(destination, utf8.RuneBytes(r));
+      destination = slices.AppendInPlaceLikeGo(destination, utf8.RuneBytes(r));
       if (lex.ItemLess === token && !lex.IsBackslashEscapePunct(tokens, i)) {
         ret = null;
         return [ret, remains, destination];

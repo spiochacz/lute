@@ -1,132 +1,164 @@
-// Compares two runtime-micro result files row by row.
+// Prints the comparison table of ONE runtime-micro run.
 //
-// Usage:
-//   node bench/compare.ts <a.json> <b.json> [--ignore-checksums]
-//   node bench/compare.ts <file.json> --slowest
+// Usage (from ts/):
+//   node bench/compare.ts <tag>
+//   reads bench/results/runtime-micro.<tag>.json (npm run bench:runtime writes it and prints this table at the end)
 //
-// Time: a row is flagged only when the [min, max] ranges of the two files (the
-// spread across the three processes) do not overlap. B/op: flagged when the
-// median changed by more than 5% (both values must be non-null). Checksums must
-// match for a row present in both files; a mismatch exits with status 1 unless
-// --ignore-checksums is given (use it only for rows whose code changed on purpose).
+// Two tags are refused. Two separate runs cannot be compared: the machine drifts
+// 15-35% over minutes, so the same code measured in two runs can differ by that
+// much (tasks/001-analysis.md, Step 0). Only impls of one group measured
+// interleaved in the same run are comparable.
 //
-// --slowest: for each runtime row with a ref row of the same group.name|input,
-// prints the ten largest ratios runtime / ref, with the ratio range from the
-// spreads.
+// One line per group (group.name|input), groups sorted by id. Rules:
+// - Baseline: ref if the group has a ref impl, else legacy, else the first listed impl.
+// - Time: the fastest process per impl (ns per unit). An impl's ratio to the
+//   baseline is its fastest over the baseline's fastest. 'same' when the two differ
+//   by less than 20% (relative to the baseline), otherwise 'X.XXx faster' or
+//   'X.XXx slower'.
+// - Allocation: median bytes/op. 'same' when the two differ by less than 5%
+//   (relative to the larger), otherwise 'X.XXx more' or 'X.XXx less'.
+// - Spread: max / min over the processes of one impl. Flagged UNSTABLE above 1.5.
+// - A zero or non-finite time is printed as DEFECT, never dropped.
 
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
+const RESULTS = fileURLToPath(new URL("./results/", import.meta.url));
+const SAME_TIME = 0.2;
+const SAME_ALLOC = 0.05;
+const UNSTABLE = 1.5;
 
 interface Stat {
+  fastest: number;
   median: number;
-  min: number;
-  max: number;
+  spread: number;
 }
 
 interface Row {
   id: string;
   group: string;
-  name: string;
-  input: string;
   impl: string;
   unit: string;
   nsPerUnit: Stat;
-  bytesPerOp: Stat | null;
-  checksum: number;
+  bytesPerOp: { median: number } | null;
 }
 
-function load(file: string): Map<string, Row> {
-  const data = JSON.parse(readFileSync(file, "utf8")) as { rows: Row[] };
-  return new Map(data.rows.map((r) => [r.id, r]));
-}
-
-function fmt(x: number): string {
-  return x >= 1000 ? x.toFixed(0) : x.toFixed(2);
+function fail(message: string): never {
+  console.error(message);
+  process.exit(1);
 }
 
 const args = process.argv.slice(2);
-const ignoreChecksums = args.includes("--ignore-checksums");
-const files = args.filter((a) => !a.startsWith("--"));
+const tags = args.filter((a) => !a.startsWith("--"));
+if (tags.length > 1) {
+  fail(
+    `compare.ts takes ONE tag, got ${tags.length} (${tags.join(", ")}).\n` +
+      "Two saved runs cannot be compared: the machine drifts 15-35% between runs, so the same code can differ that much.\n" +
+      "Measure the variants together in one run (npm run bench:runtime -- <tag>) and pass that run's tag.",
+  );
+}
+if (tags.length === 0) {
+  fail("usage: node bench/compare.ts <tag>");
+}
+const file = `${RESULTS}runtime-micro.${tags[0]}.json`;
+if (!existsSync(file)) {
+  fail(`missing ${file}`);
+}
+const rows = (JSON.parse(readFileSync(file, "utf8")) as { rows: Row[] }).rows;
 
-if (args.includes("--slowest")) {
-  const rows = load(files[0]);
-  const out: { id: string; ratio: number; lo: number; hi: number; allocRuntime: number | null; allocRef: number | null }[] =
-    [];
-  for (const r of rows.values()) {
-    if (r.impl !== "runtime") continue;
-    const ref = rows.get(`${r.group}.${r.name}|${r.input}|ref`);
-    if (ref === undefined) continue;
-    out.push({
-      id: `${r.group}.${r.name}|${r.input}`,
-      ratio: r.nsPerUnit.median / ref.nsPerUnit.median,
-      lo: r.nsPerUnit.min / ref.nsPerUnit.max,
-      hi: r.nsPerUnit.max / ref.nsPerUnit.min,
-      allocRuntime: r.bytesPerOp ? r.bytesPerOp.median : null,
-      allocRef: ref.bytesPerOp ? ref.bytesPerOp.median : null,
-    });
-  }
-  out.sort((a, b) => b.ratio - a.ratio);
-  console.log("runtime / ref, ten slowest (ratio, range from spreads, B/op runtime and ref):");
-  for (const o of out.slice(0, 10)) {
-    console.log(
-      `${o.id.padEnd(48)} ${o.ratio.toFixed(2).padStart(8)}x  [${o.lo.toFixed(2)} .. ${o.hi.toFixed(2)}]  ` +
-        `B/op ${o.allocRuntime ?? "null"} vs ${o.allocRef ?? "null"}`,
-    );
-  }
-  process.exit(0);
+const groups = new Map<string, Row[]>();
+for (const r of rows) {
+  const list = groups.get(r.group) ?? [];
+  list.push(r);
+  groups.set(r.group, list);
+}
+const keys = [...groups.keys()].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+
+function baselineOf(list: Row[]): Row {
+  return list.find((r) => r.impl === "ref") ?? list.find((r) => r.impl === "legacy") ?? list[0];
 }
 
-const [fa, fb] = files;
-const A = load(fa);
-const B = load(fb);
-const timeFlags: string[] = [];
-const allocFlags: string[] = [];
-const checksumBad: string[] = [];
-let inBoth = 0;
-let withinNoise = 0;
-for (const [id, a] of A) {
-  const b = B.get(id);
-  if (b === undefined) continue;
-  inBoth++;
-  if (a.checksum !== b.checksum) {
-    checksumBad.push(`${id}: ${a.checksum} -> ${b.checksum}`);
+function fmtNs(x: number): string {
+  if (!Number.isFinite(x) || x <= 0) {
+    return String(x);
   }
-  const overlap = !(a.nsPerUnit.max < b.nsPerUnit.min || b.nsPerUnit.max < a.nsPerUnit.min);
-  const ratio = b.nsPerUnit.median / a.nsPerUnit.median;
-  if (overlap) {
-    withinNoise++;
-  } else {
-    timeFlags.push(
-      `${id.padEnd(52)} ${fmt(a.nsPerUnit.median)} -> ${fmt(b.nsPerUnit.median)} ${a.unit}  x${ratio.toFixed(2)}  ` +
-        `[${fmt(a.nsPerUnit.min)}..${fmt(a.nsPerUnit.max)}] vs [${fmt(b.nsPerUnit.min)}..${fmt(b.nsPerUnit.max)}]`,
-    );
+  if (x >= 1000) {
+    return x.toFixed(0);
   }
-  if (a.bytesPerOp && b.bytesPerOp) {
-    const br = b.bytesPerOp.median / Math.max(a.bytesPerOp.median, 1e-9);
-    if (Math.abs(br - 1) > 0.05) {
-      allocFlags.push(`${id.padEnd(52)} B/op ${a.bytesPerOp.median} -> ${b.bytesPerOp.median}`);
+  if (x >= 10) {
+    return x.toFixed(1);
+  }
+  return x.toFixed(3);
+}
+
+function isDefect(r: Row): boolean {
+  return !(Number.isFinite(r.nsPerUnit.fastest) && r.nsPerUnit.fastest > 0);
+}
+
+function timeVerdict(r: Row, base: Row): string {
+  const ratio = r.nsPerUnit.fastest / base.nsPerUnit.fastest;
+  if (Math.abs(ratio - 1) < SAME_TIME) {
+    return `same (${ratio.toFixed(2)}x)`;
+  }
+  return ratio > 1 ? `${ratio.toFixed(2)}x slower` : `${(1 / ratio).toFixed(2)}x faster`;
+}
+
+function allocVerdict(r: Row, base: Row): string {
+  if (r.bytesPerOp === null || base.bytesPerOp === null) {
+    return "n/a (null)";
+  }
+  const a = r.bytesPerOp.median;
+  const b = base.bytesPerOp.median;
+  const m = Math.max(a, b);
+  if (m === 0 || Math.abs(a - b) / m < SAME_ALLOC) {
+    return "same";
+  }
+  if (Math.min(a, b) === 0) {
+    return a > b ? "more (base 0)" : "less (impl 0)";
+  }
+  return a > b ? `${(a / b).toFixed(2)}x more` : `${(b / a).toFixed(2)}x less`;
+}
+
+const defects: string[] = [];
+const unstable: string[] = [];
+console.log(
+  `runtime-micro ${tags[0]} (${rows.length} rows). Baseline per group: ref if present, else legacy, else first listed. ` +
+    `Time: fastest process; same = within ${SAME_TIME * 100}%. Alloc: median; same = within ${SAME_ALLOC * 100}%. ` +
+    `Spread = max/min over processes; UNSTABLE above ${UNSTABLE}.\n`,
+);
+for (const key of keys) {
+  const list = groups.get(key) as Row[];
+  const base = baselineOf(list);
+  const parts = list.map((r) => {
+    const isBase = r === base;
+    const fmtd = isDefect(r) ? "DEFECT" : `${fmtNs(r.nsPerUnit.fastest)} ${r.unit}`;
+    const bytes = r.bytesPerOp === null ? "null" : String(Math.round(r.bytesPerOp.median));
+    const spread = r.nsPerUnit.spread;
+    const flag = spread > UNSTABLE ? " UNSTABLE" : "";
+    if (isDefect(r)) {
+      defects.push(`${r.id}: fastest ${r.nsPerUnit.fastest}`);
     }
-  } else if ((a.bytesPerOp === null) !== (b.bytesPerOp === null)) {
-    allocFlags.push(
-      `${id.padEnd(52)} B/op ${a.bytesPerOp ? a.bytesPerOp.median : "null"} -> ${b.bytesPerOp ? b.bytesPerOp.median : "null"}`,
-    );
-  }
+    if (spread > UNSTABLE) {
+      unstable.push(`${r.id} (spread ${spread.toFixed(2)})`);
+    }
+    let text = `${r.impl} ${fmtd}, ${bytes} B/op, spread ${spread.toFixed(2)}${flag}`;
+    if (list.length === 1) {
+      text += " [single impl, no comparison]";
+    } else if (isBase) {
+      text += " [baseline]";
+    } else if (isDefect(r) || isDefect(base)) {
+      text += " -> no verdict (zero or non-finite time)";
+    } else {
+      text += ` -> time ${timeVerdict(r, base)}; B/op ${allocVerdict(r, base)}`;
+    }
+    return text;
+  });
+  console.log(`${key}  ${parts.join("  |  ")}`);
 }
-const onlyA = [...A.keys()].filter((k) => !B.has(k));
-const onlyB = [...B.keys()].filter((k) => !A.has(k));
-
-console.log(`rows in both: ${inBoth}; time ranges overlap (within noise): ${withinNoise}`);
-console.log(`\ntime changed (ranges do not overlap): ${timeFlags.length}`);
-for (const l of timeFlags) console.log("  " + l);
-console.log(`\nB/op changed by more than 5%: ${allocFlags.length}`);
-for (const l of allocFlags) console.log("  " + l);
-if (onlyA.length || onlyB.length) {
-  console.log(`\nonly in A: ${onlyA.length}; only in B: ${onlyB.length}`);
+console.log(`\n${keys.length} groups; ${defects.length} defect row(s); ${unstable.length} unstable row(s).`);
+for (const d of defects) {
+  console.log(`  DEFECT ${d}`);
 }
-if (checksumBad.length) {
-  console.log(`\nCHECKSUM MISMATCH in ${checksumBad.length} row(s):`);
-  for (const l of checksumBad) console.log("  " + l);
-  if (!ignoreChecksums) {
-    console.error("compare: checksums differ; failing (use --ignore-checksums only for rows changed on purpose)");
-    process.exit(1);
-  }
+for (const u of unstable) {
+  console.log(`  UNSTABLE ${u}`);
 }

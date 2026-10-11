@@ -1,23 +1,33 @@
 // Micro-benchmarks of the Go runtime layer (ts/src/runtime) on ASCII and CJK input.
 //
-// Usage:
-//   npm run bench:runtime -- <tag> [--groups=g1,g2]
-// Runs every row (or only rows whose group is listed) and merges them into
-// bench/results/runtime-micro.<tag>.json. Each row runs in THREE fresh child
-// processes (`node --expose-gc --max-semi-space-size=256 bench/runtime-micro.ts
-// --row <id>`), so no row sees JIT state from another. The file records the
-// median of the per-process medians and the min and max across processes.
+// Usage (from ts/):
+//   npm run bench:runtime -- <tag> [--groups=g1,g2] [--rounds=N] [--list]
+//   npm run bench:runtime:aa            (A/A test, see bench/aa.ts)
 //
 // Row id: group.name|input|impl, where impl is runtime (the current code), ref
 // (a naive native equivalent, context only), or legacy (a bench-only copy of an
 // older approach, used by the A/B rows).
+//
+// A GROUP is everything before the last "|" of a row id (group.name|input). The
+// impls of one group are measured INTERLEAVED in one run, round-robin: round 1
+// runs impl A, impl B, ...; round 2 the same; ROUNDS = 5 by default (--rounds=N).
+// Every measurement is one fresh child process (`node --expose-gc
+// --max-semi-space-size=256 bench/runtime-micro.ts --row <id>`), so no
+// measurement sees JIT state from another. A group with one impl is run ROUNDS
+// times. Two separate runs cannot be compared (the machine drifts 15-35% over
+// minutes): compare only impls of one group within one run, see bench/compare.ts.
+//
+// Each run writes a fresh bench/results/runtime-micro.<tag>.json (nothing is
+// merged into an older file): per process the ns/unit and ns/op, the fastest,
+// median and spread, bytes/op (median, min, max), checksum, iteration counts, and
+// the machine info. The run then prints the comparison table.
 //
 // Inputs: ASCII is benchmark/commonmark-spec.md (212 KB; it has 273 non-ASCII
 // characters). CJK is the repo-root README.md repeated to about 200 KB.
 // One operation is one pass over all lines (unit "line") or over the whole text
 // (unit "KB"), or one call for strconv (unit "call").
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import * as bytes from "../src/runtime/bytes.ts";
@@ -28,12 +38,13 @@ import * as slices from "../src/runtime/slices.ts";
 import * as strconv from "../src/runtime/strconv.ts";
 import * as legacyTrim from "./legacy/trim-legacy.ts";
 import { LegacyBuffer } from "./legacy/buffer-write-legacy.ts";
-import { allocBytesPerOp, bench, gcSeenDuring } from "./lib/micro.ts";
+import { allocBytesPerOp, bench, gcSeenDuring, machineInfo, type MachineInfo } from "./lib/micro.ts";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const RESULTS_DIR = fileURLToPath(new URL("./results/", import.meta.url));
 const SELF = fileURLToPath(import.meta.url);
-const PROCESSES = 3;
+const COMPARE = fileURLToPath(new URL("./compare.ts", import.meta.url));
+const ROUNDS = 5;
 const CHILD_FLAGS = ["--expose-gc", "--max-semi-space-size=256"];
 
 const enc = new TextEncoder();
@@ -549,7 +560,7 @@ function benchAB(inputs: Input[], add: Adder): void {
     const L = inp.lineBytes;
 
     // (i) decoding: DecodeRune(subarray) against the packed decoder.
-    add("ab.decode", "subarray-DecodeRune", I, "legacy", "KB", KB, () => {
+    add("ab.decode", "DecodeRune", I, "legacy", "KB", KB, () => {
       let i = 0;
       let c = 0;
       while (i < B.length) {
@@ -559,7 +570,7 @@ function benchAB(inputs: Input[], add: Adder): void {
       }
       return c;
     });
-    add("ab.decode", "packed", I, "runtime", "KB", KB, () => {
+    add("ab.decode", "DecodeRune", I, "runtime", "KB", KB, () => {
       let i = 0;
       let c = 0;
       while (i < B.length) {
@@ -578,12 +589,12 @@ function benchAB(inputs: Input[], add: Adder): void {
       ["Trim", legacyTrim.Trim, bytes.Trim],
     ];
     for (const [name, old, cur] of trims) {
-      add("ab.trim", `${name}-array`, I, "legacy", "line", N, () => {
+      add("ab.trim", name, I, "legacy", "line", N, () => {
         let c = 0;
         for (let i = 0; i < N; i++) c += old(L[i], cutset).length;
         return c;
       });
-      add("ab.trim", `${name}-scan`, I, "runtime", "line", N, () => {
+      add("ab.trim", name, I, "runtime", "line", N, () => {
         let c = 0;
         for (let i = 0; i < N; i++) c += cur(L[i], cutset).length;
         return c;
@@ -591,12 +602,12 @@ function benchAB(inputs: Input[], add: Adder): void {
     }
 
     // (iii) Buffer.Write: subarray copy (legacy) against set() (runtime).
-    add("ab.buffer-write", "subarray", I, "legacy", "line", N, () => {
+    add("ab.buffer-write", "Write", I, "legacy", "line", N, () => {
       const b = new LegacyBuffer();
       for (let i = 0; i < N; i++) b.Write(L[i]);
       return b.Len();
     });
-    add("ab.buffer-write", "set", I, "runtime", "line", N, () => {
+    add("ab.buffer-write", "Write", I, "runtime", "line", N, () => {
       const b = new bytes.Buffer();
       for (let i = 0; i < N; i++) b.Write(L[i]);
       return b.Len();
@@ -630,20 +641,40 @@ async function runChild(id: string): Promise<void> {
 
 // ---------------------------------------------------------------- runner mode
 
-function median(xs: number[]): number {
-  const s = [...xs].sort((a, b) => a - b);
-  return s[s.length >> 1];
+// Every measurement is one child process. The impls of a group are run
+// round-robin: round 1 runs impl A, impl B, ...; round 2 the same; and so on.
+// Drift of the machine over minutes then hits all impls of a group alike.
+//
+// --aa instead makes every row a group of two identical sides, A and B, which
+// is the A/A noise test (see bench/aa.ts).
+
+export interface Stat {
+  perProcess: number[];
+  fastest: number;
+  median: number;
+  spread: number; // max / min over the processes
 }
 
-function round(x: number): number {
-  return Math.round(x * 100) / 100;
+export interface RowResult {
+  id: string; // group|impl (in --aa mode: group|A or group|B)
+  group: string; // group.name|input, or the row id in --aa mode
+  name: string;
+  input: string;
+  impl: string; // runtime, ref, legacy, or A / B in --aa mode
+  unit: string;
+  unitsPerOp: number;
+  processes: number;
+  nsPerUnit: Stat;
+  nsPerOp: Stat;
+  bytesPerOp: { perProcess: number[]; median: number; min: number; max: number } | null;
+  checksum: number;
+  iterationsPerBatch: number[];
+  opsMeasured: number[];
 }
 
 interface ChildResult {
   id: string;
   nsPerOp: number;
-  nsPerOpMin: number;
-  nsPerOpMax: number;
   nsPerUnit: number;
   itersPerBatch: number;
   batches: number;
@@ -652,73 +683,110 @@ interface ChildResult {
   opsMeasured: number;
 }
 
-function runRowInChildren(def: RowDef, processes: number = PROCESSES): ChildResult[] {
-  const results: ChildResult[] = [];
-  for (let p = 0; p < processes; p++) {
-    const res = spawnSync(process.execPath, [...CHILD_FLAGS, SELF, "--row", def.id], {
-      encoding: "utf8",
-      maxBuffer: 64 * 1024 * 1024,
-    });
-    if (res.status !== 0) {
-      throw new Error(`child failed for ${def.id}: ${res.stderr}`);
-    }
-    const line = res.stdout.split("\n").find((l) => l.startsWith("ROW_RESULT "));
-    if (line === undefined) {
-      throw new Error(`no result for ${def.id}`);
-    }
-    results.push(JSON.parse(line.slice("ROW_RESULT ".length)) as ChildResult);
-  }
-  return results;
+interface Entry {
+  label: string;
+  def: RowDef;
 }
 
-function aggregate(def: RowDef, per: ChildResult[]): Record<string, unknown> {
+interface Group {
+  key: string;
+  entries: Entry[];
+}
+
+function median(xs: number[]): number {
+  const s = [...xs].sort((a, b) => a - b);
+  return s[s.length >> 1];
+}
+
+function stat(xs: number[]): Stat {
+  return {
+    perProcess: xs,
+    fastest: Math.min(...xs),
+    median: median(xs),
+    spread: Math.max(...xs) / Math.min(...xs),
+  };
+}
+
+// Groups in the order the rows were built. In --aa mode each row is its own group.
+function planGroups(defs: RowDef[], aa: boolean): Group[] {
+  const groups = new Map<string, Group>();
+  for (const def of defs) {
+    if (aa) {
+      groups.set(def.id, {
+        key: def.id,
+        entries: [
+          { label: "A", def },
+          { label: "B", def },
+        ],
+      });
+      continue;
+    }
+    const key = def.id.slice(0, def.id.lastIndexOf("|"));
+    let g = groups.get(key);
+    if (g === undefined) {
+      g = { key, entries: [] };
+      groups.set(key, g);
+    }
+    if (g.entries.some((e) => e.label === def.impl)) {
+      throw new Error(`duplicate row id ${def.id}`);
+    }
+    g.entries.push({ label: def.impl, def });
+  }
+  return [...groups.values()];
+}
+
+function spawnMeasurement(id: string): ChildResult {
+  const res = spawnSync(process.execPath, [...CHILD_FLAGS, SELF, "--row", id], {
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  if (res.status !== 0) {
+    throw new Error(`child failed for ${id}: ${res.stderr}`);
+  }
+  const line = res.stdout.split("\n").find((l) => l.startsWith("ROW_RESULT "));
+  if (line === undefined) {
+    throw new Error(`no result for ${id}`);
+  }
+  return JSON.parse(line.slice("ROW_RESULT ".length)) as ChildResult;
+}
+
+function summarise(g: Group, e: Entry, per: ChildResult[]): RowResult {
   const checksums = new Set(per.map((p) => p.checksum));
   if (checksums.size !== 1) {
-    throw new Error(`checksum differs between processes for ${def.id}: ${[...checksums].join(", ")}`);
+    throw new Error(`checksum differs between processes for ${e.def.id}: ${[...checksums].join(", ")}`);
   }
   const nsUnit = per.map((p) => p.nsPerUnit);
   const nsOp = per.map((p) => p.nsPerOp);
   const bytesVals = per.map((p) => p.bytesPerOp);
   const bytesOk = bytesVals.every((v): v is number => v !== null) ? bytesVals : null;
   return {
-    id: def.id,
-    group: def.group,
-    name: def.name,
-    input: def.input,
-    impl: def.impl,
-    unit: def.unit,
-    unitsPerOp: def.unitsPerOp,
-    nsPerUnit: { median: round(median(nsUnit)), min: round(Math.min(...nsUnit)), max: round(Math.max(...nsUnit)) },
-    nsPerOp: { median: round(median(nsOp)), min: round(Math.min(...nsOp)), max: round(Math.max(...nsOp)) },
-    bytesPerOp:
-      bytesOk === null
-        ? null
-        : {
-            median: Math.round(median(bytesOk)),
-            min: Math.round(Math.min(...bytesOk)),
-            max: Math.round(Math.max(...bytesOk)),
-          },
-    checksum: per[0].checksum,
-    itersPerBatch: per.map((p) => p.itersPerBatch),
+    id: `${g.key}|${e.label}`,
+    group: g.key,
+    name: e.def.name,
+    input: e.def.input,
+    impl: e.label,
+    unit: e.def.unit,
+    unitsPerOp: e.def.unitsPerOp,
     processes: per.length,
+    nsPerUnit: stat(nsUnit),
+    nsPerOp: stat(nsOp),
+    bytesPerOp: bytesOk
+      ? { perProcess: bytesOk, median: median(bytesOk), min: Math.min(...bytesOk), max: Math.max(...bytesOk) }
+      : null,
+    checksum: per[0].checksum,
+    iterationsPerBatch: per.map((p) => p.itersPerBatch),
+    opsMeasured: per.map((p) => p.opsMeasured),
   };
 }
 
-function writeOut(file: string, tag: string, rowsById: Map<string, Record<string, unknown>>): void {
-  writeFileSync(
-    file,
-    JSON.stringify(
-      {
-        tag,
-        date: new Date().toISOString(),
-        node: process.version,
-        processesPerRow: PROCESSES,
-        rows: [...rowsById.values()],
-      },
-      null,
-      2,
-    ),
-  );
+function measureGroup(g: Group, rounds: number): RowResult[] {
+  const per: ChildResult[][] = g.entries.map(() => []);
+  for (let r = 0; r < rounds; r++) {
+    g.entries.forEach((e, k) => {
+      per[k].push(spawnMeasurement(e.def.id));
+    });
+  }
+  return g.entries.map((e, k) => summarise(g, e, per[k]));
 }
 
 function runner(): void {
@@ -726,53 +794,54 @@ function runner(): void {
   const tag = args.find((a) => !a.startsWith("--")) ?? "latest";
   const groupsArg = args.find((a) => a.startsWith("--groups="));
   const groups = groupsArg ? new Set(groupsArg.slice("--groups=".length).split(",")) : null;
+  const roundsArg = args.find((a) => a.startsWith("--rounds="));
+  const rounds = roundsArg === undefined ? ROUNDS : Number(roundsArg.slice("--rounds=".length));
+  if (!Number.isInteger(rounds) || rounds < 1) {
+    throw new Error(`--rounds must be a positive integer, got ${roundsArg}`);
+  }
+  const aa = args.includes("--aa");
+  const defs = buildRows().filter((d) => groups === null || groups.has(d.group));
+  const plan = planGroups(defs, aa);
+  if (args.includes("--list")) {
+    for (const g of plan) {
+      console.log(`${g.key}  ${g.entries.map((e) => e.label).join(" ")}`);
+    }
+    console.log(`${plan.length} groups, ${defs.length} rows`);
+    return;
+  }
+
   mkdirSync(RESULTS_DIR, { recursive: true });
   const file = `${RESULTS_DIR}runtime-micro.${tag}.json`;
-  // Rows are merged into an existing file, so a suite can be run in several
-  // foreground invocations (one per group) without losing earlier rows.
-  const existing: { rows: Record<string, unknown>[] } = existsSync(file)
-    ? (JSON.parse(readFileSync(file, "utf8")) as { rows: Record<string, unknown>[] })
-    : { rows: [] };
-  const rowsById = new Map<string, Record<string, unknown>>(existing.rows.map((r) => [r.id as string, r]));
-
-  const defs = buildRows().filter((d) => groups === null || groups.has(d.group));
-  console.log(`running ${defs.length} rows x ${PROCESSES} processes into ${file}`);
+  const machine: MachineInfo = machineInfo();
+  const rows: RowResult[] = [];
+  // The file is written fresh and rewritten after every group, so a run that is
+  // stopped early still leaves the groups it finished.
+  const save = (): void => {
+    writeFileSync(
+      file,
+      JSON.stringify({ tag, mode: aa ? "aa" : "interleaved", rounds, machine, rows }, null, 2) + "\n",
+    );
+  };
+  save();
+  const measurements = plan.reduce((n, g) => n + g.entries.length * rounds, 0);
+  console.log(`${plan.length} groups, ${measurements} measurements (${rounds} rounds, one process each) into ${file}`);
   let i = 0;
-  for (const def of defs) {
+  for (const g of plan) {
     i++;
-    rowsById.set(def.id, aggregate(def, runRowInChildren(def)));
-    console.log(`[${i}/${defs.length}] ${def.id}`);
-    writeOut(file, tag, rowsById);
+    rows.push(...measureGroup(g, rounds));
+    save();
+    console.log(`[${i}/${plan.length}] ${g.key}`);
   }
   console.log(`wrote ${file}`);
-}
-
-// Interleaved A/A run: every row is measured in 2 * PROCESSES child processes
-// that alternate between the tags aa1 and aa2, so slow drift of the machine
-// (CPU frequency, temperature, other load) hits both tags equally. Two
-// back-to-back full runs do not have that property.
-function runnerInterleavedAA(): void {
-  const groupsArg = process.argv.find((a) => a.startsWith("--groups="));
-  const groups = groupsArg ? new Set(groupsArg.slice("--groups=".length).split(",")) : null;
-  mkdirSync(RESULTS_DIR, { recursive: true });
-  const defs = buildRows().filter((d) => groups === null || groups.has(d.group));
-  const out = [new Map<string, Record<string, unknown>>(), new Map<string, Record<string, unknown>>()];
-  console.log(`interleaved A/A: ${defs.length} rows x ${2 * PROCESSES} processes`);
-  let i = 0;
-  for (const def of defs) {
-    i++;
-    const per = runRowInChildren(def, 2 * PROCESSES);
-    out[0].set(def.id, aggregate(def, per.filter((_, k) => k % 2 === 0)));
-    out[1].set(def.id, aggregate(def, per.filter((_, k) => k % 2 === 1)));
-    console.log(`[${i}/${defs.length}] ${def.id}`);
+  if (!aa) {
+    const c = spawnSync(process.execPath, [COMPARE, tag], { stdio: "inherit" });
+    if (c.status !== 0) {
+      throw new Error("compare.ts failed");
+    }
   }
-  writeOut(`${RESULTS_DIR}runtime-micro.aa1.json`, "aa1", out[0]);
-  writeOut(`${RESULTS_DIR}runtime-micro.aa2.json`, "aa2", out[1]);
 }
 
-if (process.argv.includes("--aa-interleaved")) {
-  runnerInterleavedAA();
-} else if (process.argv.includes("--controls")) {
+if (process.argv.includes("--controls")) {
   const zero = await allocBytesPerOp(() => {
     let s = 0;
     for (let i = 0; i < 100; i++) s += i;

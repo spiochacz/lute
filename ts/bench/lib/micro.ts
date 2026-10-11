@@ -2,14 +2,40 @@
 //
 // bench() measures time per operation in the current process. allocBytesPerOp()
 // estimates heap bytes allocated per operation. The runner (bench/runtime-micro.ts)
-// runs each row in its own child process, so JIT state from one row never leaks
-// into another, and aggregates several processes per row.
+// runs every measurement in its own child process, so JIT state from one
+// measurement never leaks into another, and interleaves the variants of a group
+// (see the runner's header). machineInfo() describes the machine for the result files.
 //
 // Checksum: bench() folds the result of exactly ONE operation (run before the
 // warm-up), so the checksum depends only on the code and the input, never on how
 // many iterations were run.
 
 import { PerformanceObserver } from "node:perf_hooks";
+import { arch, availableParallelism, cpus, platform, release } from "node:os";
+
+// Machine description stored in every result file.
+export interface MachineInfo {
+  node: string;
+  cpu: string;
+  logicalCpus: number;
+  availableParallelism: number;
+  platform: string;
+  arch: string;
+  date: string;
+}
+
+export function machineInfo(): MachineInfo {
+  const list = cpus();
+  return {
+    node: process.version,
+    cpu: list[0]?.model ?? "unknown",
+    logicalCpus: list.length,
+    availableParallelism: availableParallelism(),
+    platform: `${platform()} ${release()}`,
+    arch: arch(),
+    date: new Date().toISOString(),
+  };
+}
 
 export interface BenchOptions {
   warmupMs?: number; // default 300 ms

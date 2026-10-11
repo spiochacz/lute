@@ -16,6 +16,7 @@
     "bench:oracle": "node bench/oracle-baseline.ts",
     "bench:runtime": "node --expose-gc --max-semi-space-size=256 bench/runtime-micro.ts",
     "bench:runtime:aa": "node bench/aa.ts",
-    "bench:compare": "node bench/compare.ts"
+    "bench:compare": "node bench/compare.ts",
+    "bench:macro": "node bench/macro.ts"
   }
 }

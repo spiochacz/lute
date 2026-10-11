@@ -15,6 +15,11 @@ Node 24 or later runs the `.ts` files directly (type stripping); there is no tra
 | `npm run test:full` | the same files with `LUTE_TEST_FULL=1` (loaded from `.env.full`): nothing is sampled |
 | `npm run build` | writes `dist/lute.min.js`, `dist/lute.esm.js` and `dist/types/` |
 | `node scripts/build.mjs --sourcemap` | the same, plus source maps for the two bundles |
+| `npm run bench:runtime -- <tag> [--groups=g] [--rounds=N]` | runtime micro-benchmarks, one run, prints the comparison table (see `bench/`) |
+| `npm run bench:runtime:aa -- [tag] [--groups=g] [--rounds=N]` | A/A noise test of the same rows, interleaved in one run |
+| `npm run bench:compare -- <tag>` | prints the table of a saved micro-benchmark run again |
+| `npm run bench:macro -- [tag] [--rounds=N] [--methods=A,B]` | port bundle against the reference bundle on `benchmark/commonmark-spec.md` |
+| `npm run bench:oracle` | baseline of the reference bundle alone |
 
 `test` versus `test:full`: `test/e2e/full.ts` exports `FULL` and `sample()`. In the default run the tests that cross a large corpus with many option sets run the base option sets on every document and the other sets on every sixth document; the throw-parity scan, the random fuzz and the editing loops use smaller counts. `test:full` runs everything. Tests of Go's own cases, the spec cases under the base option sets and the regression cases are never sampled.
 
@@ -49,4 +54,4 @@ Node 24 or later runs the `.ts` files directly (type stripping); there is no tra
 - `e2e/renderers/` and `e2e/root/`: per-renderer and per-method comparisons, and the Go test tables ported with Go's expected values.
 - `go/`: ports of the Go test files of `../test/`, one TypeScript file per Go file.
 
-`tools/`: Go programs (`gen-*-vectors`, each with its own `go.mod`, run with the system Go and `-tags javascript`) that write the vectors in `testdata/` directories, and scripts (`extract-*.mjs`) that extract the tables of Go test files into JSON. `bench/` holds benchmarks (not part of the tests). `scripts/build.mjs` is the build.
+`tools/`: Go programs (`gen-*-vectors`, each with its own `go.mod`, run with the system Go and `-tags javascript`) that write the vectors in `testdata/` directories, and scripts (`extract-*.mjs`) that extract the tables of Go test files into JSON. `bench/` holds benchmarks (not part of the tests). Two rules govern them. First, the machine drifts by 15 to 35% over minutes, so two separate runs can never be compared: `bench:compare` takes one tag and refuses two. Second, variants are measured interleaved inside one run, one fresh child process per measurement: the runtime rows round-robin the impls of a group (`group.name|input`) for `--rounds` rounds (default 5), and `bench:macro` alternates the port bundle and the reference bundle. Compare only variants measured in the same run; use the fastest process per variant; treat a difference under 20% as noise (5% for bytes per operation). `bench:runtime:aa` checks this rule: unchanged code on both sides should agree within 10% for most rows (the Step 0 runs in `../tasks/001-analysis.md` reached 87% with an earlier runner; the current one is not yet measured on the full suite). Each run writes a fresh `bench/results/*.<tag>.json` (git-ignored). Benchmarks take minutes; run them one at a time. `scripts/build.mjs` is the build.

@@ -52,6 +52,40 @@ function inCutset(set: string, r: number): boolean {
   return false;
 }
 
+// PORT-NOTE: perf, departs from 1:1 (Go stdlib bytes.TrimLeft, TrimRight): the cutsets used by Lute are short and fixed, and inCutset scans the cutset for every code point. asciiCutsetCache keeps, per cutset, a 128-entry membership table when every code point of the cutset is ASCII, and null otherwise (those keep inCutset). A code point of 0x80 or more is never in an ASCII cutset, so the table answers exactly what inCutset answers, for every input byte including invalid UTF-8 (RuneError, 0xFFFD, is not ASCII).
+const asciiCutsetCache = new Map<string, Uint8Array | null>();
+const asciiCutsetCacheMax = 64; // Cutsets beyond this many distinct strings are not cached, so an unbounded set of cutsets cannot grow the map.
+
+// cutsetTable returns the membership table of cutset (1 for each ASCII code point of it), or null when cutset has a non-ASCII code unit.
+function cutsetTable(cutset: string): Uint8Array | null {
+  const cached = asciiCutsetCache.get(cutset);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const table = new Uint8Array(128);
+  let result: Uint8Array | null = table;
+  for (let i = 0; i < cutset.length; i++) {
+    const c = cutset.charCodeAt(i);
+    if (c >= 0x80) {
+      result = null;
+      break;
+    }
+    table[c] = 1;
+  }
+  if (asciiCutsetCache.size < asciiCutsetCacheMax) {
+    asciiCutsetCache.set(cutset, result);
+  }
+  return result;
+}
+
+// inCutsetTable reports whether the code point r is in cutset. table is cutsetTable(cutset); when it is null, the string is scanned.
+function inCutsetTable(cutset: string, table: Uint8Array | null, r: number): boolean {
+  if (table === null) {
+    return inCutset(cutset, r);
+  }
+  return r < 0x80 && table[r] === 1;
+}
+
 // equalAt reports whether p occurs in s starting at off. The caller guarantees
 // that off + p.length <= s.length.
 function equalAt(s: Uint8Array, off: number, p: Uint8Array): boolean {
@@ -476,6 +510,8 @@ export function TrimLeft(s: Uint8Array, cutset: string): Uint8Array {
   if (cutset === "") {
     return s;
   }
+  // PORT-NOTE: perf, departs from 1:1 (Go stdlib bytes.TrimLeft): membership through cutsetTable, see asciiCutsetCache.
+  const table = cutsetTable(cutset);
   let start = 0;
   while (start < s.length) {
     let r = s[start];
@@ -485,7 +521,7 @@ export function TrimLeft(s: Uint8Array, cutset: string): Uint8Array {
       r = v & 0xffffff;
       w = v >>> 24;
     }
-    if (!inCutset(cutset, r)) {
+    if (!inCutsetTable(cutset, table, r)) {
       break;
     }
     start += w;
@@ -501,6 +537,8 @@ export function TrimRight(s: Uint8Array, cutset: string): Uint8Array {
   if (s.length === 0 || cutset === "") {
     return s;
   }
+  // PORT-NOTE: perf, departs from 1:1 (Go stdlib bytes.TrimRight): membership through cutsetTable, see asciiCutsetCache.
+  const table = cutsetTable(cutset);
   let end = s.length;
   while (end > 0) {
     let r = s[end - 1];
@@ -510,7 +548,7 @@ export function TrimRight(s: Uint8Array, cutset: string): Uint8Array {
       r = v & 0xffffff;
       w = v >>> 24;
     }
-    if (!inCutset(cutset, r)) {
+    if (!inCutsetTable(cutset, table, r)) {
       break;
     }
     end -= w;

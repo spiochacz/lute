@@ -17,6 +17,8 @@
     "bench:runtime": "node --expose-gc --max-semi-space-size=256 bench/runtime-micro.ts",
     "bench:runtime:aa": "node bench/aa.ts",
     "bench:compare": "node bench/compare.ts",
-    "bench:macro": "node bench/macro.ts"
+    "bench:macro": "node bench/macro.ts",
+    "bench:startup": "node bench/startup.ts",
+    "bench:profile": "node bench/profile.ts"
   }
 }

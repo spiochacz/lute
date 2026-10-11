@@ -1,7 +1,8 @@
 // Micro-benchmarks of the Go runtime layer (ts/src/runtime) on ASCII and CJK input.
 //
 // Usage (from ts/):
-//   npm run bench:runtime -- <tag> [--groups=g1,g2] [--rounds=N] [--list]
+//   npm run bench:runtime -- <tag> [--groups=g1,g2] [--only=<id prefix>] [--rounds=N] [--list]
+//   (--only keeps the rows whose id starts with the prefix, e.g. --only=ab.append)
 //   npm run bench:runtime:aa            (A/A test, see bench/aa.ts)
 //
 // Row id: group.name|input|impl, where impl is runtime (the current code), ref
@@ -38,6 +39,9 @@ import * as slices from "../src/runtime/slices.ts";
 import * as strconv from "../src/runtime/strconv.ts";
 import * as legacyTrim from "./legacy/trim-legacy.ts";
 import { LegacyBuffer } from "./legacy/buffer-write-legacy.ts";
+import { AppendLegacy, AppendByteLegacy } from "./legacy/append-legacy.ts";
+import { EscapeHTMLLegacy } from "./legacy/escape-legacy.ts";
+import * as escapeEncode from "../src/html/escape_encode.ts";
 import { allocBytesPerOp, bench, gcSeenDuring, machineInfo, type MachineInfo } from "./lib/micro.ts";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
@@ -174,6 +178,8 @@ function buildRows(): RowDef[] {
   }
   benchStrconv(add);
   benchAB(inputs, add);
+  benchAppendAB(add);
+  benchEscapeAB(add);
   return rows;
 }
 
@@ -615,6 +621,90 @@ function benchAB(inputs: Input[], add: Adder): void {
   }
 }
 
+// A/B rows for slices.Append and slices.AppendByte. Each op starts from an empty slice
+// and appends pieces up to a total of 64 KB, so one op is one call-sequence of ~64 KB.
+// "inplace" rows pre-allocate the capacity (no growth); "realloc" starts at capacity 0.
+function benchAppendAB(add: Adder): void {
+  const TOTAL = 64 * 1024;
+  const pieces: [string, number][] = [
+    ["4B-inplace", 4],
+    ["16B-inplace", 16],
+    ["64B-inplace", 64],
+    ["1024B-inplace", 1024],
+  ];
+  for (const [input, size] of pieces) {
+    const piece = new Uint8Array(size).fill(0x61);
+    const k = TOTAL / size;
+    const base = slices.Make(0, TOTAL);
+    add("ab", "append.Append", input, "legacy", "call", k, () => {
+      let s = slices.Reslice(base, 0);
+      for (let i = 0; i < k; i++) s = AppendLegacy(s, piece);
+      return s.length;
+    });
+    add("ab", "append.Append", input, "runtime", "call", k, () => {
+      let s = slices.Reslice(base, 0);
+      for (let i = 0; i < k; i++) s = slices.Append(s, piece);
+      return s.length;
+    });
+  }
+  {
+    const piece = new Uint8Array(16).fill(0x62);
+    const k = TOTAL / 16;
+    add("ab", "append.Append", "16B-realloc", "legacy", "call", k, () => {
+      let s = slices.Make(0, 0);
+      for (let i = 0; i < k; i++) s = AppendLegacy(s, piece);
+      return s.length;
+    });
+    add("ab", "append.Append", "16B-realloc", "runtime", "call", k, () => {
+      let s = slices.Make(0, 0);
+      for (let i = 0; i < k; i++) s = slices.Append(s, piece);
+      return s.length;
+    });
+  }
+  {
+    const base = slices.Make(0, TOTAL);
+    add("ab", "append.AppendByte", "byte-inplace", "legacy", "call", TOTAL, () => {
+      let s = slices.Reslice(base, 0);
+      for (let i = 0; i < TOTAL; i++) s = AppendByteLegacy(s, i & 0xff);
+      return s.length;
+    });
+    add("ab", "append.AppendByte", "byte-inplace", "runtime", "call", TOTAL, () => {
+      let s = slices.Reslice(base, 0);
+      for (let i = 0; i < TOTAL; i++) s = slices.AppendByte(s, i & 0xff);
+      return s.length;
+    });
+    add("ab", "append.AppendByte", "byte-realloc", "legacy", "call", TOTAL, () => {
+      let s = slices.Make(0, 0);
+      for (let i = 0; i < TOTAL; i++) s = AppendByteLegacy(s, i & 0xff);
+      return s.length;
+    });
+    add("ab", "append.AppendByte", "byte-realloc", "runtime", "call", TOTAL, () => {
+      let s = slices.Make(0, 0);
+      for (let i = 0; i < TOTAL; i++) s = slices.AppendByte(s, i & 0xff);
+      return s.length;
+    });
+  }
+}
+
+// A/B rows for html.EscapeHTML. One op is one call on the input.
+function benchEscapeAB(add: Adder): void {
+  const plain = "The quick brown fox jumps over the lazy dog, then runs off home again.".slice(0, 60);
+  if (plain.length !== 60) throw new Error("plain text must be 60 bytes");
+  const two = plain.slice(0, 10) + "&" + plain.slice(11, 40) + "<" + plain.slice(41);
+  const fragment = '<p class="note">Fish &amp; chips &gt; "soup" <b>x</b></p>\n';
+  let frag = "";
+  while (frag.length < 2048) frag += fragment;
+  const inputs: [string, Uint8Array][] = [
+    ["60B-plain", enc.encode(plain)],
+    ["60B-2special", enc.encode(two)],
+    ["2KB-many", enc.encode(frag.slice(0, 2048))],
+  ];
+  for (const [input, b] of inputs) {
+    add("ab", "escape.EscapeHTML", input, "legacy", "call", 1, () => EscapeHTMLLegacy(b).length);
+    add("ab", "escape.EscapeHTML", input, "runtime", "call", 1, () => escapeEncode.EscapeHTML(b).length);
+  }
+}
+
 // ---------------------------------------------------------------- child mode
 
 async function runChild(id: string): Promise<void> {
@@ -800,7 +890,12 @@ function runner(): void {
     throw new Error(`--rounds must be a positive integer, got ${roundsArg}`);
   }
   const aa = args.includes("--aa");
-  const defs = buildRows().filter((d) => groups === null || groups.has(d.group));
+  // --only=<prefix> selects the rows whose id starts with the prefix (e.g. --only=ab.append).
+  const onlyArg = args.find((a) => a.startsWith("--only="));
+  const only = onlyArg === undefined ? null : onlyArg.slice("--only=".length);
+  const defs = buildRows().filter(
+    (d) => (groups === null || groups.has(d.group)) && (only === null || d.id.startsWith(only)),
+  );
   const plan = planGroups(defs, aa);
   if (args.includes("--list")) {
     for (const g of plan) {

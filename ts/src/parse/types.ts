@@ -41,6 +41,7 @@ export class Context {
   rootIAL: ast.Node | null; // Root node kramdown IAL
   tabs: Map<ast.Node, tabsParseState> | null; // Parse state of tab fences and the selected item. Nullable: Go checks `nil == context.tabs` and creates the map lazily
   tabsItemIAL: ast.Node | null; // Node that owns the attributes of the previous line's tab title
+  hasTable: boolean; // PORT-NOTE: perf, not a Go field. Set when this parse creates a table or a table cell (table.ts); finalParseTableCellRich skips its tree walk when it is false
 
   constructor(ParseOption: Options) {
     this.Tree = null;
@@ -62,6 +63,7 @@ export class Context {
     this.rootIAL = null;
     this.tabs = null;
     this.tabsItemIAL = null;
+    this.hasTable = false;
   }
 }
 

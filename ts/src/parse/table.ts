@@ -174,6 +174,7 @@ Context.prototype.parseTable = function (this: Context, paragraph: ast.Node): [a
         }
       }
 
+      this.hasTable = true; // PORT-NOTE: perf, departs from 1:1 (parse/table.go:139): records that a table node was created, so finalParseTableCellRich can skip its walk otherwise
       retTable = new ast.Node(ast.NodeTable);
       retTable.TableAligns = aligns;
       retTable.TableAligns = aligns;
@@ -308,6 +309,7 @@ Context.prototype.parseTable0 = function (this: Context, tokens: Uint8Array): as
     }
   }
 
+  this.hasTable = true; // PORT-NOTE: perf, departs from 1:1 (parse/table.go:262): records that a table node was created, see finalParseTableCellRich
   ret = new ast.Node(ast.NodeTable);
   ret.TableAligns = aligns;
   ret.TableAligns = aligns;
@@ -412,6 +414,7 @@ Context.prototype.parseTableRow = function (this: Context, line: Uint8Array, ali
   for (; i < colsLen && i < alignsLen; i++) {
     col = lex.TrimWhitespace(cols[i])!;
     col = bytes.ReplaceAllOrNil(col, pipeEntity, pipeBytes); // nil for an empty col, so an empty cell has nil Tokens
+    this.hasTable = true; // PORT-NOTE: perf, departs from 1:1 (parse/table.go:356): records that a table cell was created, see finalParseTableCellRich
     const cell = new ast.Node(ast.NodeTableCell);
     cell.TableCellAlign = aligns[i];
     cell.Tokens = col;
@@ -420,6 +423,7 @@ Context.prototype.parseTableRow = function (this: Context, line: Uint8Array, ali
 
   // The remaining columns may need to be filled in
   for (; i < alignsLen; i++) {
+    this.hasTable = true; // PORT-NOTE: perf, departs from 1:1 (parse/table.go:363): records that a table cell was created, see finalParseTableCellRich
     const cell = new ast.Node(ast.NodeTableCell);
     cell.TableCellAlign = aligns[i];
     ret.AppendChild(cell);

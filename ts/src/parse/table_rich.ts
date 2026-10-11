@@ -335,6 +335,10 @@ Tree.prototype.finalParseTableCellRich = function (this: Tree): void {
   if (tree.Context!.ParseOption.DisableTableCellRich) {
     return;
   }
+  // PORT-NOTE: perf, departs from 1:1 (parse/table_rich.go:208): the walk below only acts on NodeTableCell nodes. Only the table code of this parse (table.ts) creates them, and it sets Context.hasTable; without a table the walk visits and changes nothing, so it is skipped.
+  if (!tree.Context!.hasTable) {
+    return;
+  }
   ast.Walk(tree.Root!, (n: ast.Node, entering: boolean): ast.WalkStatus => {
     if (!entering || ast.NodeTableCell !== n.Type) {
       return ast.WalkContinue;

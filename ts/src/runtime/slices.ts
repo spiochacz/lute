@@ -103,6 +103,19 @@ export function AppendByte(a: Uint8Array, c: number): Uint8Array {
   return v;
 }
 
+// CapAfterByteAppends is a port addition. It returns the capacity of a slice that
+// started as new Uint8Array(0) and received n single-byte appends with AppendByte.
+// The capacity changes only when the length passes it, and then becomes
+// CalculateNewCapacity(length, capacity), so the loop jumps from one growth to the
+// next and runs in O(log n).
+export function CapAfterByteAppends(n: number): number {
+  let cap = 0;
+  while (cap < n) {
+    cap = CalculateNewCapacity(cap + 1, cap);
+  }
+  return cap;
+}
+
 // AppendString mirrors Go's append(a, s...) where s is a string: it appends the
 // UTF-8 encoding of s. Lone surrogates encode as U+FFFD (EF BF BD).
 export function AppendString(a: Uint8Array, s: string): Uint8Array {

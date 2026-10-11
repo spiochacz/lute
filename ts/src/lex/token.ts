@@ -123,51 +123,60 @@ export function IsBlank(tokens: Uint8Array): boolean {
   return true;
 }
 
+// splitElement returns the element tokens[from:to] as a new slice. Its length is to-from and its capacity is the one
+// that the byte-by-byte slices.AppendByte loop of the Go original gives it (slices.CapAfterByteAppends), so that a
+// later append to the element behaves the same. An empty element is new Uint8Array(0), as in the original.
+function splitElement(tokens: Uint8Array, from: number, to: number): Uint8Array {
+  const n = to - from;
+  if (0 === n) {
+    return new Uint8Array(0);
+  }
+  const element = slices.Make(n, slices.CapAfterByteAppends(n));
+  element.set(tokens.subarray(from, to), 0);
+  return element;
+}
+
+// PORT-NOTE: perf, departs from lex/token.go:127-146: the element bounds are found first and each element is then
+// created in one copy, instead of one slices.AppendByte (a new view per byte) per byte. The elements are the same:
+// an element is the run of bytes between two separators, so it is contiguous in tokens; the length and the capacity
+// are those of the byte-by-byte appends (see splitElement); an empty element is pushed as new Uint8Array(0), and the
+// last element is pushed only when it is non-empty, as in the original.
 export function Split(tokens: Uint8Array, separator: number): Uint8Array[] {
   let ret: Uint8Array[] = [];
   const length = tokens.length;
-  let i = 0;
-  let token = 0;
-  let line: Uint8Array = new Uint8Array(0);
-  for (; i < length; i++) {
-    token = tokens[i];
-    if (separator !== token) {
-      line = slices.AppendByte(line, token);
-      continue;
+  let start = 0;
+  for (let i = 0; i < length; i++) {
+    if (separator === tokens[i]) {
+      ret.push(splitElement(tokens, start, i));
+      start = i + 1;
     }
-
-    ret.push(line);
-    line = new Uint8Array(0);
   }
-  if (0 < line.length) {
-    ret.push(line);
+  if (0 < length - start) {
+    ret.push(splitElement(tokens, start, length));
   }
   return ret;
 }
 
 // SplitWithoutBackslashEscape splits Tokens into substrings using separator as the delimiter. Characters escaped by a backslash \ are not counted as separators.
 export function SplitWithoutBackslashEscape(tokens: Uint8Array, separator: number): Uint8Array[] {
+  // PORT-NOTE: perf, departs from lex/token.go:149-172: same as Split (see the note there). The separator test and
+  // IsBackslashEscapePunct decide the element bounds, as in the original; an escaped separator stays inside its element.
   let ret: Uint8Array[] = [];
   const length = tokens.length;
-  let token = 0;
-  let line: Uint8Array = new Uint8Array(0);
+  let start = 0;
   for (let i = 0; i < length; i++) {
-    token = tokens[i];
-    if (separator !== token || IsBackslashEscapePunct(tokens, i)) {
-      line = slices.AppendByte(line, token);
-      continue;
+    if (separator === tokens[i] && !IsBackslashEscapePunct(tokens, i)) {
+      //if ItemPipe == token && inInlineMath(tokens, i) {
+      //	line = append(line, token)
+      //	continue
+      //}
+
+      ret.push(splitElement(tokens, start, i));
+      start = i + 1;
     }
-
-    //if ItemPipe == token && inInlineMath(tokens, i) {
-    //	line = append(line, token)
-    //	continue
-    //}
-
-    ret.push(line);
-    line = new Uint8Array(0);
   }
-  if (0 < line.length) {
-    ret.push(line);
+  if (0 < length - start) {
+    ret.push(splitElement(tokens, start, length));
   }
   return ret;
 }

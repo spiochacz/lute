@@ -142,6 +142,20 @@ test("CalculateNewCapacity matches the bundle formula", () => {
   assert.equal(slices.CalculateNewCapacity(2400, 2000), 2500);
 });
 
+test("CapAfterByteAppends equals the capacity of real AppendByte loops for every n from 0 to 5000", () => {
+  // One run of 5000 single-byte appends visits every n: after n appends the capacity must be CapAfterByteAppends(n).
+  let a: Uint8Array = new Uint8Array(0);
+  for (let n = 0; n <= 5000; n++) {
+    assert.equal(slices.Cap(a), slices.CapAfterByteAppends(n), `n=${n}`);
+    assert.equal(a.length, n);
+    a = slices.AppendByte(a, n & 0xff);
+  }
+  assert.equal(slices.CapAfterByteAppends(0), 0);
+  assert.equal(slices.CapAfterByteAppends(1), 1);
+  assert.equal(slices.CapAfterByteAppends(3), 4);
+  assert.equal(slices.CapAfterByteAppends(1025), 1280);
+});
+
 test("Append reallocates with the grown capacity and leaves the original untouched", () => {
   const s = slices.Make(1024, 1024);
   s.fill(0x41);

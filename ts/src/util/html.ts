@@ -276,6 +276,8 @@ export function DomText(n: html.Node | null): string {
     buf.WriteString(n.Data);
     return buf.String();
   }
+  // PORT-NOTE: perf, departs from 1:1 (util/html.go:235, DomText): the buffer starts at 256 bytes, so the text of a typical element is written without the 0 -> 64 -> 128 reallocations. Only the string result is returned, so its capacity is not observable.
+  buf.Grow(256);
   for (let child = n.FirstChild; null !== child; child = child.NextSibling) {
     domText0(child, buf);
   }

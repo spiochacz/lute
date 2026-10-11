@@ -12,6 +12,7 @@
 import * as bytes from "../runtime/bytes.ts";
 import * as conv from "../runtime/conv.ts";
 import * as strings from "../runtime/strings.ts";
+import * as utf8 from "../runtime/utf8.ts";
 import * as ast from "../ast/index.ts";
 import * as editor from "../editor/index.ts";
 import * as html from "../html/index.ts";
@@ -110,8 +111,54 @@ const openCurlyBraceColon: Uint8Array = util.StrToBytes("{: ");
 const emptyIAL: Uint8Array = util.StrToBytes("{:}");
 
 // PORT-NOTE: ial is nullable because Go callers pass nil IALs.
+// ialGrowthCap returns the capacity that bytes.Buffer reaches for the writes IAL2Tokens makes for ial,
+// by replaying the growth of Buffer.reserve (WriteString reserves 3 bytes per UTF-16 unit, WriteByte 1). It writes no bytes.
+function ialGrowthCap(ial: string[][] | null): number {
+  let n = 0;
+  let cap = 0;
+  const reserve = (extra: number): void => {
+    const need = n + extra;
+    if (need <= cap) {
+      return;
+    }
+    let newCap = cap * 2;
+    if (newCap < need) {
+      newCap = need;
+    }
+    if (newCap < 64) {
+      newCap = 64;
+    }
+    cap = newCap;
+  };
+  const str = (s: string): void => {
+    reserve(3 * s.length);
+    n += utf8.ByteLen(s);
+  };
+  const oneByte = (): void => {
+    reserve(1);
+    n++;
+  };
+  str("{: ");
+  if (null !== ial) {
+    for (let i = 0; i < ial.length; i++) {
+      const kv = ial[i];
+      str(kv[0]);
+      str("=\"");
+      str(kv[1]);
+      oneByte();
+      if (i < ial.length - 1) {
+        oneByte();
+      }
+    }
+  }
+  oneByte();
+  return cap;
+}
+
 export function IAL2Tokens(ial: string[][] | null): Uint8Array {
   const buf = new bytes.Buffer();
+  // PORT-NOTE: perf, departs from 1:1 (parse/inline_attribute_list.go:91, IAL2Tokens): the buffer is allocated once with the capacity that the growth of its writes reaches (ialGrowthCap), so no reallocation happens. The capacity of the result, which Append can write into, is the same as before.
+  buf.Grow(ialGrowthCap(ial));
   buf.WriteString("{: ");
   if (null !== ial) {
     for (let i = 0; i < ial.length; i++) {

@@ -1,0 +1,26 @@
+--- a/render/code_block_html_renderjs.go
++++ b/render/code_block_html_renderjs.go
+@@ -26,7 +26,11 @@
+ 	if !node.IsFencedCodeBlock {
+ 		if entering {
+ 			// 缩进代码块处理
+-			r.WriteString("<pre><code>")
++			var attrs [][]string
++			r.handleKramdownBlockIAL(node)
++			attrs = append(attrs, node.KramdownIAL...)
++			r.Tag("pre", attrs, false)
++			r.WriteString("<code>")
+ 			r.Write(html.EscapeHTML(node.FirstChild.Tokens))
+ 			r.WriteString("</code></pre>")
+ 			r.Newline()
+@@ -49,8 +53,8 @@
+ 	if entering {
+ 		r.Newline()
+ 		var attrs [][]string
+-		r.handleKramdownBlockIAL(node)
+-		attrs = append(attrs, node.KramdownIAL...)
++		r.handleKramdownBlockIAL(node.Parent)
++		attrs = append(attrs, node.Parent.KramdownIAL...)
+ 		if !preDiv {
+ 			r.Tag("pre", attrs, false)
+ 		}

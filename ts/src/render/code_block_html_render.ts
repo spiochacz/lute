@@ -35,7 +35,12 @@ HtmlRenderer.prototype.renderCodeBlock = function (this: HtmlRenderer, node: ast
   if (!node.IsFencedCodeBlock) {
     if (entering) {
       // Indented code block
-      r.WriteString("<pre><code>");
+      // PORT-NOTE: departs from render/code_block_html_renderjs.go: the pre element keeps the block attributes as in native Go (tasks/002-upstream-bugs.md item 59; oracle patch 0001)
+      const attrs: string[][] = [];
+      r.handleKramdownBlockIAL(node);
+      attrs.push(...(node.KramdownIAL ?? []));
+      r.Tag("pre", attrs, false);
+      r.WriteString("<code>");
       r.Write(html.EscapeHTML(nodeTokens(node.FirstChild!)));
       r.WriteString("</code></pre>");
       r.Newline();
@@ -58,9 +63,10 @@ HtmlRenderer.prototype.renderCodeBlockCode = function (this: HtmlRenderer, node:
 
   if (entering) {
     r.Newline();
+    // PORT-NOTE: departs from render/code_block_html_renderjs.go: attributes come from the code block node as in native Go (tasks/002-upstream-bugs.md item 59; oracle patch 0001)
     const attrs: string[][] = [];
-    r.handleKramdownBlockIAL(node);
-    attrs.push(...(node.KramdownIAL ?? []));
+    r.handleKramdownBlockIAL(node.Parent!);
+    attrs.push(...(node.Parent!.KramdownIAL ?? []));
     if (!preDiv) {
       r.Tag("pre", attrs, false);
     }

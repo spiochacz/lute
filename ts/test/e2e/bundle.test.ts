@@ -1,5 +1,5 @@
 // The drop-in bundle: dist/lute.min.js (built by `npm run build`) is loaded as a consumer would load it, in a fresh Node process, next to the
-// reference bundle javascript/lute.min.js (or $LUTE_ORACLE) in another fresh process, so that the two `globalThis.Lute` never mix.
+// reference bundle test/oracle/lute.ref.min.cjs (or $LUTE_ORACLE) in another fresh process, so that the two `globalThis.Lute` never mix.
 // bundle_driver.mjs makes a fixed list of calls in each process and prints the results as JSON; the test compares the two documents.
 
 import { test } from "node:test";

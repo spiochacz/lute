@@ -5,10 +5,11 @@ import { New } from "../../src/index.ts";
 import type { JsBuildDifference } from "./wave3_support.ts";
 import { assertRows, table, withTesting } from "./wave3_support.ts";
 
-// Row 4 of kramdownBlockIALIDNAmeTests: Go renders the fenced code block through the Chroma highlighter (class="highlight-chroma", with the
-// block ID as data-block-id); the JavaScript build has no syntax highlighter, and the reference bundle and the port render a plain code block.
+// Row 4 of kramdownBlockIALIDNAmeTests: Go renders the fenced code block through the Chroma highlighter (class="highlight-chroma"). The JavaScript
+// build has no syntax highlighter, so the reference and the port render a plain code block, but the block attributes stay on the pre element as in
+// native Go (deliberate departure, tasks/002-upstream-bugs.md item 59; oracle patch 0001).
 const JS_BUILD_DIFFERENCES: Record<string, JsBuildDifference> = {
-  "4": { reference: "<pre><code>foo\n</code></pre>\n", reason: "javascript build variant has no syntax highlighting (Go: <pre data-block-id=...><code class=\"highlight-chroma\">...)" },
+  "4": { reference: "<pre data-block-id=\"20201105103725-3ad5wcz\"><code>foo\n</code></pre>\n", reason: "javascript build variant has no syntax highlighting (Go: <pre data-block-id=...><code class=\"highlight-chroma\">...)" },
 };
 
 test("TestKramdownBlockIALs", () => {

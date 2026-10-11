@@ -1,7 +1,8 @@
 // Oracle harness: loads the reference oracle bundle (by default
-// javascript/lute.min.js, the GopherJS build of the Go implementation; override
-// with the LUTE_ORACLE environment variable) and offers helpers for comparing
-// TypeScript output with it.
+// test/oracle/lute.ref.min.cjs, the GopherJS build of the Go implementation at the
+// commit in UPSTREAM_PIN plus the patches in tools/oracle/patches/; see README.md
+// next to it; override with the LUTE_ORACLE environment variable) and offers
+// helpers for comparing TypeScript output with it.
 
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
@@ -16,10 +17,12 @@ export interface OracleLute {
   [key: string]: any;
 }
 
-const DEFAULT_ORACLE_PATH = fileURLToPath(new URL("../../../javascript/lute.min.js", import.meta.url));
+// The extension is .cjs, not .js: ts/package.json has "type": "module", so a .js
+// file here would load as ESM, and the GopherJS bundle needs CommonJS `require`.
+const DEFAULT_ORACLE_PATH = fileURLToPath(new URL("./lute.ref.min.cjs", import.meta.url));
 
 // Absolute path of the oracle bundle in use: $LUTE_ORACLE when set and
-// non-empty, otherwise the repository's javascript/lute.min.js.
+// non-empty, otherwise test/oracle/lute.ref.min.cjs (the patched reference).
 export function oraclePath(): string {
   const fromEnv = process.env.LUTE_ORACLE;
   return fromEnv !== undefined && fromEnv !== "" ? fromEnv : DEFAULT_ORACLE_PATH;

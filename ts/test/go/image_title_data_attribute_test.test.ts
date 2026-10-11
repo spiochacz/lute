@@ -1,5 +1,5 @@
-// Port of test/image_title_data_attribute_test.go (TestImageTitleDataAttribute). This test belongs to the newest Go commit, which the committed
-// reference bundle javascript/lute.min.js does not include; the assertions below are Go's own expected values.
+// Port of test/image_title_data_attribute_test.go (TestImageTitleDataAttribute). The reference bundle test/oracle/lute.ref.min.cjs is built from
+// the pinned commit (UPSTREAM_PIN), which includes this change; the assertions below are Go's own expected values.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";

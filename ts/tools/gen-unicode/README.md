@@ -10,7 +10,7 @@ This is its own Go module (`lute-ts-gen-unicode`), separate from the parent Go m
 
 ## Toolchain
 
-The committed data was generated with Go 1.21.13 (`unicode.Version` 15.0.0), because the reference bundle `javascript/lute.min.js` was built with that version. Use `GOTOOLCHAIN=local` so Go does not download and switch to a different toolchain.
+The committed data was generated with Go 1.21.13 (`unicode.Version` 15.0.0), because the reference bundle `test/oracle/lute.ref.min.cjs` was built with that version. Use `GOTOOLCHAIN=local` so Go does not download and switch to a different toolchain.
 
 ## Regenerate
 

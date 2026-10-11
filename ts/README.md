@@ -1,6 +1,6 @@
 # lute-ts
 
-A 1:1 TypeScript port of [Lute](https://github.com/88250/lute), the Markdown engine written in Go. The port covers the `javascript` build variant: everything that `javascript/main.go` exposes as the global `Lute` object. It is checked against the Go tests and against `javascript/lute.min.js`, a GopherJS build of the same Go code (the "oracle").
+A 1:1 TypeScript port of [Lute](https://github.com/88250/lute), the Markdown engine written in Go. The port covers the `javascript` build variant: everything that `javascript/main.go` exposes as the global `Lute` object. It is checked against the Go tests and against `test/oracle/lute.ref.min.cjs`, a GopherJS build of the same Go code with the patches in `tools/oracle/patches/` (the "oracle"). The port follows the `javascript` build except for the departures listed in `../tasks/002-upstream-bugs.md`.
 
 The Go commit that is ported is in `UPSTREAM_PIN`. The rules for the port are in `PORTING.md` (binding for every ported file). Background is in `../tasks/001-analysis.md`; Go behaviour that looks wrong and is reproduced on purpose is marked `// UPSTREAM-BUG:` in the sources and listed in `../tasks/002-upstream-bugs.md`.
 
@@ -20,15 +20,15 @@ Node 24 or later runs the `.ts` files directly (type stripping); there is no tra
 
 ## The build
 
-- `dist/lute.min.js`: `src/bundle.ts` bundled by esbuild as an IIFE (`es2022`, minified syntax, whitespace and identifiers, no property mangling, no source map unless `--sourcemap`). Loading it as a script sets `globalThis.Lute`, as `javascript/lute.min.js` does.
+- `dist/lute.min.js`: `src/bundle.ts` bundled by esbuild as an IIFE (`es2022`, minified syntax, whitespace and identifiers, no property mangling, no source map unless `--sourcemap`). Loading it as a script sets `globalThis.Lute`, as the GopherJS build `javascript/lute.min.js` does.
 - `dist/lute.esm.js`: `src/index.ts` as an ES module, not minified.
 - `dist/types/`: declarations of `src/index.ts`, emitted by `tsc -p tsconfig.build.json` (`emitDeclarationOnly`). `tsconfig.json` stays `noEmit`.
 
 ## How the oracle comparison works
 
-`test/oracle/oracle.ts` loads the reference bundle once (`require`) and `test/e2e/helpers.ts` creates a port engine and an oracle engine from the same list of setter calls, runs the same call on both and compares the outcome: both return the same text (generated node IDs and timestamps normalised), or both throw. Inputs for DOM-taking methods come from the oracle's own forward methods. The oracle is `javascript/lute.min.js`; set `LUTE_ORACLE` to the path of another bundle to compare against it:
+`test/oracle/oracle.ts` loads the reference bundle once (`require`) and `test/e2e/helpers.ts` creates a port engine and an oracle engine from the same list of setter calls, runs the same call on both and compares the outcome: both return the same text (generated node IDs and timestamps normalised), or both throw. Inputs for DOM-taking methods come from the oracle's own forward methods. The oracle is `test/oracle/lute.ref.min.cjs` (its origin and rebuild steps are in `test/oracle/README.md`). It is a `.cjs` file because `package.json` has `"type": "module"`. Set `LUTE_ORACLE` to the path of another bundle to compare against it, for example the unpatched GopherJS build:
 
-    LUTE_ORACLE=/path/to/other/lute.min.js npm test
+    LUTE_ORACLE=/path/to/javascript/lute.min.js npm test
 
 `test/e2e/bundle.test.ts` and `test/e2e/bundle_driver.mjs` run `dist/lute.min.js` and the oracle in separate child processes and compare the global object, an engine's function-valued members and about 650 calls.
 
@@ -44,7 +44,7 @@ Node 24 or later runs the `.ts` files directly (type stripping); there is no tra
 
 `test/`:
 
-- `oracle/`: the oracle loader and its own tests.
+- `oracle/`: the oracle loader and its own tests, and the reference bundle `lute.ref.min.cjs` (see `oracle/README.md`).
 - `e2e/`: comparisons with the oracle (`helpers.ts`, `option_sets.ts`, `full.ts`), the CommonMark/GFM spec runs, the file and fuzz runs, the regressions, `throw_parity.test.ts`, `bundle.test.ts`.
 - `e2e/renderers/` and `e2e/root/`: per-renderer and per-method comparisons, and the Go test tables ported with Go's expected values.
 - `go/`: ports of the Go test files of `../test/`, one TypeScript file per Go file.

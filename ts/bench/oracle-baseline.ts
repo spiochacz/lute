@@ -1,4 +1,4 @@
-// Baseline benchmark of the oracle (javascript/lute.min.js) on benchmark/commonmark-spec.md.
+// Baseline benchmark of the oracle (test/oracle/lute.ref.min.cjs, or $LUTE_ORACLE) on benchmark/commonmark-spec.md.
 // Each API path runs on a fresh engine with default options: 10 warm-up runs,
 // then 30 timed runs. Add another engine later by passing another
 // (name, makeEngine) pair to runSuite.

@@ -1,4 +1,4 @@
-// Run by bundle.test.ts in a fresh Node process: node bundle_driver.mjs <path of a lute.min.js style bundle>.
+// Run by bundle.test.ts in a fresh Node process: node bundle_driver.mjs <path of a lute.min.js style bundle, e.g. the reference from oraclePath()>.
 // Loads the bundle as a consumer would (a script that sets globalThis.Lute), makes a fixed list of calls and prints one JSON document:
 // the keys of the global object, its constants, the function-valued keys of an engine, and the result of every call ("THROW" when it threw).
 // Nothing here depends on the implementation behind the bundle. Generated node IDs are normalised by the test, not here.

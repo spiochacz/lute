@@ -1,0 +1,9 @@
+{
+ "imageLazyLoadingTests": [
+  [
+   "0",
+   "![foo](bar.png)",
+   "<p><img src=\"/images/img-loading.svg\" data-src=\"bar.png\" alt=\"foo\" /></p>\n"
+  ]
+ ]
+}

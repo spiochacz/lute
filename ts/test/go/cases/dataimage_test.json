@@ -1,0 +1,1 @@
+{"dataImageTests":[["0","![foo](data:image...)","<p>![foo](data:image...)</p>\n"]]}

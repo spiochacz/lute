@@ -1,0 +1,83 @@
+{
+ "renderListStyleTests": [
+  [
+   "4",
+   "1) foo\n",
+   "<ol data-style=\"1)\">\n<li>foo</li>\n</ol>\n"
+  ],
+  [
+   "3",
+   "1. foo\n",
+   "<ol data-style=\"1.\">\n<li>foo</li>\n</ol>\n"
+  ],
+  [
+   "2",
+   "- foo\n",
+   "<ul data-style=\"-\">\n<li>foo</li>\n</ul>\n"
+  ],
+  [
+   "1",
+   "+ foo\n",
+   "<ul data-style=\"+\">\n<li>foo</li>\n</ul>\n"
+  ],
+  [
+   "0",
+   "* foo\n",
+   "<ul data-style=\"*\">\n<li>foo</li>\n</ul>\n"
+  ]
+ ],
+ "renderListStyleVditorTests": [
+  [
+   "4",
+   "1) foo\n",
+   "<ol data-tight=\"true\" data-marker=\"1)\" data-block=\"0\" data-style=\"1)\"><li data-marker=\"1)\">foo</li></ol>"
+  ],
+  [
+   "3",
+   "1. foo\n",
+   "<ol data-tight=\"true\" data-marker=\"1.\" data-block=\"0\" data-style=\"1.\"><li data-marker=\"1.\">foo</li></ol>"
+  ],
+  [
+   "2",
+   "- foo\n",
+   "<ul data-tight=\"true\" data-marker=\"-\" data-block=\"0\" data-style=\"-\"><li data-marker=\"-\">foo</li></ul>"
+  ],
+  [
+   "1",
+   "+ foo\n",
+   "<ul data-tight=\"true\" data-marker=\"+\" data-block=\"0\" data-style=\"+\"><li data-marker=\"+\">foo</li></ul>"
+  ],
+  [
+   "0",
+   "* foo\n",
+   "<ul data-tight=\"true\" data-marker=\"*\" data-block=\"0\" data-style=\"*\"><li data-marker=\"*\">foo</li></ul>"
+  ]
+ ],
+ "renderListStyleVditorIRTests": [
+  [
+   "4",
+   "1) foo\n",
+   "<ol data-tight=\"true\" data-marker=\"1)\" data-block=\"0\" data-style=\"1)\"><li data-marker=\"1)\">foo</li></ol>"
+  ],
+  [
+   "3",
+   "1. foo\n",
+   "<ol data-tight=\"true\" data-marker=\"1.\" data-block=\"0\" data-style=\"1.\"><li data-marker=\"1.\">foo</li></ol>"
+  ],
+  [
+   "2",
+   "- foo\n",
+   "<ul data-tight=\"true\" data-marker=\"-\" data-block=\"0\" data-style=\"-\"><li data-marker=\"-\">foo</li></ul>"
+  ],
+  [
+   "1",
+   "+ foo\n",
+   "<ul data-tight=\"true\" data-marker=\"+\" data-block=\"0\" data-style=\"+\"><li data-marker=\"+\">foo</li></ul>"
+  ],
+  [
+   "0",
+   "* foo\n",
+   "<ul data-tight=\"true\" data-marker=\"*\" data-block=\"0\" data-style=\"*\"><li data-marker=\"*\">foo</li></ul>"
+  ]
+ ]
+}

@@ -1,0 +1,21 @@
+{
+ "tagTests": [
+  [
+   "1",
+   "#**foo**#\n",
+   "<p><em>#<strong>foo</strong>#</em></p>\n"
+  ],
+  [
+   "0",
+   "#foo#\n",
+   "<p><em>#foo#</em></p>\n"
+  ]
+ ],
+ "tagDisableTests": [
+  [
+   "0",
+   "#foo#\n",
+   "<p>#foo#</p>\n"
+  ]
+ ]
+}

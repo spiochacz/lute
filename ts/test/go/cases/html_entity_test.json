@@ -1,0 +1,1 @@
+{"htmlEntityTests":[["0","&amp;foo&","<p>&amp;foo&amp;</p>\n"]]}

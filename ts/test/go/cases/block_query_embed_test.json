@@ -1,0 +1,1 @@
+{"blockQueryEmbedTests":[["0","foo\n{{ SELECT * FROM blocks }}\nbar","<p>foo</p>\n<div>\"SELECT * FROM blocks\"</div>\n<p>bar</p>\n"]]}

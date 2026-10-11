@@ -1,0 +1,14 @@
+{
+ "imgPathSpaceTests": [
+  [
+   "1",
+   "![foo](bar baz.png 'title')",
+   "<p><img src=\"bar baz.png\" alt=\"foo\" title=\"title\" /></p>\n"
+  ],
+  [
+   "0",
+   "![foo](bar baz.png \"title\")",
+   "<p><img src=\"bar baz.png\" alt=\"foo\" title=\"title\" /></p>\n"
+  ]
+ ]
+}

@@ -1,0 +1,46 @@
+{
+ "disableNestedListTests": [
+  [
+   "空列表项-子列表",
+   "-\n  - bar\n",
+   "<ul>\n<li>\n<ul>\n<li>bar</li>\n</ul>\n</li>\n</ul>\n"
+  ],
+  [
+   "一行-连写",
+   "- - bar\n",
+   "<ul>\n<li>\n<ul>\n<li>bar</li>\n</ul>\n</li>\n</ul>\n"
+  ],
+  [
+   "一行*连写",
+   "* * bar\n",
+   "<ul>\n<li>\n<ul>\n<li>bar</li>\n</ul>\n</li>\n</ul>\n"
+  ],
+  [
+   "一行有序连写",
+   "1. 1. bar\n",
+   "<ol>\n<li>\n<ol>\n<li>bar</li>\n</ol>\n</li>\n</ol>\n"
+  ],
+  [
+   "有内容列表项-子列表-不受影响",
+   "- foo\n  - bar\n",
+   "<ul>\n<li>foo\n<ul>\n<li>bar</li>\n</ul>\n</li>\n</ul>\n"
+  ],
+  [
+   "同级列表-不受影响",
+   "- foo\n- bar\n",
+   "<ul>\n<li>foo</li>\n<li>bar</li>\n</ul>\n"
+  ]
+ ],
+ "defaultNestedListTests": [
+  [
+   "空列表项-子列表",
+   "-\n  - bar\n",
+   "<ul>\n<li>\n<ul>\n<li>bar</li>\n</ul>\n</li>\n</ul>\n"
+  ]
+ ],
+ "issue17890Tests": [
+  "- 1\n\n  -\n- 3\n- 4\n",
+  "-\n  -\n- bar\n",
+  "-\n  -\n  - baz\n"
+ ]
+}

@@ -1,0 +1,1 @@
+{"codeSyntaxHighlightDetectLang1Tests":[["0","```\nmysql> SELECT * FROM `test_table`;\n```\n","<pre><code class=\"language-mysql\">mysql&gt; SELECT * FROM `test_table`;\n</code></pre>\n"]],"codeSyntaxHighlightOffTests":[["0","```java\nint i;\n```\n","<pre><code class=\"language-java\">int i;\n</code></pre>\n"]]}

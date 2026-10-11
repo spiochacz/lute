@@ -1,0 +1,16 @@
+{
+ "setextTests": [
+  [
+   "0",
+   "foo\n---\n",
+   "<h2 id=\"foo\">foo</h2>\n"
+  ]
+ ],
+ "setextDisableTests": [
+  [
+   "0",
+   "foo\n---\n",
+   "<p>foo</p>\n<hr />\n"
+  ]
+ ]
+}

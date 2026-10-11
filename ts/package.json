@@ -1,0 +1,21 @@
+{
+  "name": "lute-ts",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@types/node": "^24",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --test \"src/**/*.test.ts\" \"test/**/*.test.ts\"",
+    "test:full": "node --env-file=.env.full --test \"src/**/*.test.ts\" \"test/**/*.test.ts\"",
+    "build": "node scripts/build.mjs",
+    "bench:oracle": "node bench/oracle-baseline.ts",
+    "bench:runtime": "node --expose-gc --max-semi-space-size=256 bench/runtime-micro.ts",
+    "bench:runtime:aa": "node bench/aa.ts",
+    "bench:compare": "node bench/compare.ts"
+  }
+}

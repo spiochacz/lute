@@ -1,0 +1,24 @@
+{
+ "inlineTests": [
+  [
+   "3",
+   "# foo\n\n* bar\n  * baz \n\nbazz",
+   "# foo* bar  * bazbazz"
+  ],
+  [
+   "2",
+   "<form enctype=",
+   "<form enctype="
+  ],
+  [
+   "1",
+   "**foo** [foo](bar)\n",
+   "foo foo"
+  ],
+  [
+   "0",
+   "1. foo\n",
+   "1. foo"
+  ]
+ ]
+}

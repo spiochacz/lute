@@ -1,0 +1,9 @@
+{
+ "yamlFrontMatterTests": [
+  [
+   "0",
+   "---\ntitle: Hello World\n---\n",
+   "<pre class=\"vditor-yml-front-matter\"><code class=\"language-yaml\">title: Hello World</code></pre>\n"
+  ]
+ ]
+}

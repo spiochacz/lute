@@ -10,7 +10,12 @@ import type { InputKind, LuteGlobal } from "./methods.ts";
 export const TS_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 export const PORT_BUNDLE = fileURLToPath(new URL("../../dist/lute.min.js", import.meta.url));
 export const ESM_BUILD = fileURLToPath(new URL("../../dist/lute.esm.js", import.meta.url));
-export const REF_BUNDLE = fileURLToPath(new URL("../../test/oracle/lute.ref.min.cjs", import.meta.url));
+// LUTE_BENCH_REF replaces the reference side with another bundle, for example a
+// copy of dist/lute.min.js built before a change ("before" versus "after").
+export const REF_BUNDLE =
+  process.env.LUTE_BENCH_REF !== undefined && process.env.LUTE_BENCH_REF !== ""
+    ? process.env.LUTE_BENCH_REF
+    : fileURLToPath(new URL("../../test/oracle/lute.ref.min.cjs", import.meta.url));
 export const COMMONMARK_PATH = fileURLToPath(new URL("../../../benchmark/commonmark-spec.md", import.meta.url));
 
 export const INPUT_NAMES = ["tiny", "small", "medium", "spec"] as const;

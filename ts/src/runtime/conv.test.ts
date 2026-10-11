@@ -157,3 +157,95 @@ test("StringFromBytes: one decoding pass gives the same result as validate-then-
   }
   assert.ok(valid > 100 && valid < 3900, `valid inputs: ${valid}`);
 });
+
+// bytesFromStringBefore is BytesFromString as it was before the ASCII fast path: TextEncoder for every string, and an exact-fit copy
+// when the encoder's result does not have its own ArrayBuffer of that size. It is the reference for the differential test below.
+const referenceEncoder = new TextEncoder();
+function bytesFromStringBefore(s: string): Uint8Array {
+  const out = referenceEncoder.encode(s);
+  if (out.byteOffset === 0 && out.buffer.byteLength === out.length) {
+    return out;
+  }
+  return new Uint8Array(out);
+}
+
+// generatedStrings returns a deterministic list of strings covering the cases of BytesFromString: empty, ASCII short and long,
+// 2-, 3- and 4-byte characters, lone surrogates, and the ASCII boundary at 64 code units.
+function generatedStrings(count: number): string[] {
+  let seed = 0x2f6e2b1;
+  const rnd = (): number => {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    return seed / 4294967296;
+  };
+  const int = (lo: number, hi: number): number => lo + Math.floor(rnd() * (hi - lo + 1));
+  const unit = (lo: number, hi: number): string => String.fromCharCode(int(lo, hi));
+  const codePoint = (lo: number, hi: number): string => {
+    let cp = int(lo, hi);
+    while (cp >= 0xd800 && cp <= 0xdfff) {
+      cp = int(lo, hi);
+    }
+    return String.fromCodePoint(cp);
+  };
+  const out: string[] = ["", "a", "\u0000", "\u007f", "\u0080", "\uD800", "\uDC00", "􏿿"];
+  for (const n of [1, 31, 32, 33, 63, 64, 65, 66]) {
+    out.push("x".repeat(n));
+    out.push("x".repeat(n - 1) + "\u0080");
+    out.push("\u0080" + "x".repeat(n - 1));
+  }
+  for (let i = out.length; i < count; i++) {
+    const kind = i % 8;
+    const len = kind === 2 ? int(65, 300) : int(0, 64);
+    let s = "";
+    for (let k = 0; k < len; k++) {
+      switch (kind) {
+        case 0:
+        case 1:
+        case 2:
+          s += unit(0x00, 0x7f);
+          break;
+        case 3:
+          s += rnd() < 0.5 ? unit(0x00, 0x7f) : codePoint(0x80, 0x7ff);
+          break;
+        case 4:
+          s += rnd() < 0.5 ? unit(0x00, 0x7f) : codePoint(0x800, 0xffff);
+          break;
+        case 5:
+          s += rnd() < 0.5 ? unit(0x00, 0x7f) : codePoint(0x10000, 0x10ffff);
+          break;
+        case 6:
+          s += rnd() < 0.7 ? unit(0x00, 0x7f) : unit(0xd800, 0xdfff);
+          break;
+        default:
+          s += rnd() < 0.5 ? unit(0x00, 0xffff) : codePoint(0x10000, 0x10ffff);
+          break;
+      }
+    }
+    out.push(s);
+  }
+  return out;
+}
+
+test("BytesFromString matches the encoder path on 24,000 generated strings", () => {
+  const strings = generatedStrings(24000);
+  assert.ok(strings.length >= 20000);
+  const tail = conv.BytesFromString("xyz");
+  strings.forEach((s, i) => {
+    const want = bytesFromStringBefore(s);
+    const got = conv.BytesFromString(s);
+    const label = `case ${i} (${s.length} code units)`;
+    assert.equal(got.length, want.length, label);
+    assert.equal(slices.Cap(got), slices.Cap(want), label);
+    assert.equal(got.byteOffset, 0, label);
+    assert.equal(Object.getPrototypeOf(got), Object.getPrototypeOf(want), label);
+    for (let k = 0; k < want.length; k++) {
+      if (got[k] !== want[k]) {
+        assert.fail(`${label}: byte ${k} differs`);
+      }
+    }
+    // appending to the result behaves as appending to the reference: same capacity and content
+    const grownGot = slices.Append(got, tail);
+    const grownWant = slices.Append(want, tail);
+    assert.equal(slices.Cap(grownGot), slices.Cap(grownWant), label);
+    assert.equal(hex(grownGot), hex(grownWant), label);
+  });
+});

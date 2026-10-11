@@ -11,7 +11,7 @@
 //
 // Port additions (not in Go): StringFromBytes is implemented here with
 // utf8.DecodeRunePacked, because the per-byte decoding inside bytes.Buffer.String
-// is not exported. The short ASCII fast path is also a port addition.
+// is not exported. The short ASCII fast paths of BytesFromString and StringFromBytes are also port additions.
 
 import * as utf8 from "./utf8.ts";
 
@@ -23,10 +23,36 @@ const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 // builds the string without TextDecoder.
 const asciiShortMax = 32;
 
+// asciiBytesMax is the length up to which BytesFromString checks for ASCII and
+// fills the array with charCodeAt instead of calling TextEncoder.
+const asciiBytesMax = 64;
+
 // BytesFromString returns the UTF-8 encoding of s as a fresh array whose capacity
 // equals its length (its own ArrayBuffer of exactly that size). Unpaired
 // surrogates encode as U+FFFD (EF BF BD).
+// PORT-NOTE: perf, departs from Go's []byte(s) conversion (no Lute source line; runtime layer): a string of at most 64 code
+// units that holds only ASCII is copied by a loop into new Uint8Array(length). TextEncoder.encode has a fixed cost of several
+// hundred nanoseconds per call, which dominated the HTML and block DOM converters. The bytes are the same (one byte per code
+// unit, and an ASCII string has no surrogates), and the result is the same kind of array with capacity equal to its length.
 export function BytesFromString(s: string): Uint8Array {
+  // typeof keeps the old behaviour for a value that is not a string (TextEncoder reads undefined as ""), which s.length would throw on.
+  if (typeof s === "string" && s.length <= asciiBytesMax) {
+    const n = s.length;
+    let ascii = true;
+    for (let i = 0; i < n; i++) {
+      if (s.charCodeAt(i) >= 0x80) {
+        ascii = false;
+        break;
+      }
+    }
+    if (ascii) {
+      const ret = new Uint8Array(n);
+      for (let i = 0; i < n; i++) {
+        ret[i] = s.charCodeAt(i);
+      }
+      return ret;
+    }
+  }
   const out = encoder.encode(s);
   if (out.byteOffset === 0 && out.buffer.byteLength === out.length) {
     return out;

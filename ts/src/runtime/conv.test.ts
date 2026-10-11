@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import * as slices from "./slices.ts";
 import * as conv from "./conv.ts";
+import * as utf8 from "./utf8.ts";
 
 const hex = (b: Uint8Array): string => Array.from(b, (x) => x.toString(16).padStart(2, "0")).join(" ");
 
@@ -122,4 +123,37 @@ test("lone surrogate and invalid bytes are lossy, as documented", () => {
   // Invalid bytes cannot survive a round trip through a JS string.
   const b = Uint8Array.of(0xff);
   assert.deepEqual(conv.BytesFromString(conv.StringFromBytes(b)), Uint8Array.of(0xef, 0xbf, 0xbd));
+});
+
+test("StringFromBytes: one decoding pass gives the same result as validate-then-decode", () => {
+  // Reference: utf8.Valid decides; valid input is decoded without BOM stripping, invalid input is read per byte.
+  const plain = new TextDecoder("utf-8", { ignoreBOM: true });
+  let seed = 12345;
+  const rnd = (n: number): number => {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    return seed % n;
+  };
+  // Bytes biased towards the boundaries of UTF-8 sequences, so that valid and invalid inputs both occur often.
+  const pool = [0x00, 0x41, 0x7f, 0x80, 0x8f, 0xa0, 0xbf, 0xc0, 0xc1, 0xc2, 0xdf, 0xe0, 0xe1, 0xed, 0xef, 0xf0, 0xf4, 0xf5, 0xff, 0xbb];
+  let valid = 0;
+  for (let i = 0; i < 4000; i++) {
+    const n = rnd(12);
+    const b = new Uint8Array(n);
+    for (let j = 0; j < n; j++) {
+      b[j] = rnd(3) === 0 ? rnd(256) : pool[rnd(pool.length)];
+    }
+    let want = "";
+    if (utf8.Valid(b)) {
+      valid++;
+      want = plain.decode(b);
+    } else {
+      for (let k = 0; k < n; ) {
+        const v = utf8.DecodeRunePacked(b, k);
+        want += String.fromCodePoint(v & 0xffffff);
+        k += v >>> 24;
+      }
+    }
+    assert.equal(conv.StringFromBytes(b), want, hex(b));
+  }
+  assert.ok(valid > 100 && valid < 3900, `valid inputs: ${valid}`);
 });

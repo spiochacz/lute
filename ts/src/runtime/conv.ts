@@ -16,7 +16,8 @@
 import * as utf8 from "./utf8.ts";
 
 const encoder = new TextEncoder();
-const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
+// decoder throws on invalid UTF-8 (fatal), so one pass both validates and decodes. ignoreBOM keeps a leading U+FEFF.
+const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
 // asciiShortMax is the length up to which StringFromBytes checks for ASCII and
 // builds the string without TextDecoder.
@@ -54,8 +55,14 @@ export function StringFromBytes(b: Uint8Array): string {
       return s;
     }
   }
-  if (utf8.Valid(b)) {
+  // PORT-NOTE: perf, departs from Go's string(b) conversion (no Lute source line; runtime layer): one fatal TextDecoder
+  // pass replaces utf8.Valid plus a second decode. The fatal decoder rejects exactly the byte sequences utf8.Valid
+  // rejects (overlong forms, surrogates, values above U+10FFFF, truncated sequences), and for valid input it gives the
+  // same string as the non-fatal decoder did. Invalid input throws and takes the per-byte loop below, as before.
+  try {
     return decoder.decode(b);
+  } catch {
+    // invalid UTF-8: fall through to the per-byte replacement below
   }
   let out = "";
   for (let i = 0; i < n; ) {

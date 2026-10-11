@@ -15,7 +15,14 @@ const RUNNER = fileURLToPath(new URL("./runtime-micro.ts", import.meta.url));
 const args = process.argv.slice(2);
 const groupsArg = args.find((a) => a.startsWith("--groups="));
 
-if (!args.includes("--summary-only")) {
+if (args.includes("--interleaved")) {
+  // One run in which the two tags alternate process by process (see runnerInterleavedAA).
+  const cmd = ["--expose-gc", "--max-semi-space-size=256", RUNNER, "--aa-interleaved", ...(groupsArg ? [groupsArg] : [])];
+  const res = spawnSync(process.execPath, cmd, { stdio: "inherit" });
+  if (res.status !== 0) {
+    throw new Error("interleaved runner failed");
+  }
+} else if (!args.includes("--summary-only")) {
   for (const tag of ["aa1", "aa2"]) {
     const cmd = ["--expose-gc", "--max-semi-space-size=256", RUNNER, tag, ...(groupsArg ? [groupsArg] : [])];
     const res = spawnSync(process.execPath, cmd, { stdio: "inherit" });

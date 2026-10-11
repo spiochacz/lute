@@ -652,9 +652,9 @@ interface ChildResult {
   opsMeasured: number;
 }
 
-function runRowInChildren(def: RowDef): ChildResult[] {
+function runRowInChildren(def: RowDef, processes: number = PROCESSES): ChildResult[] {
   const results: ChildResult[] = [];
-  for (let p = 0; p < PROCESSES; p++) {
+  for (let p = 0; p < processes; p++) {
     const res = spawnSync(process.execPath, [...CHILD_FLAGS, SELF, "--row", def.id], {
       encoding: "utf8",
       maxBuffer: 64 * 1024 * 1024,
@@ -747,7 +747,32 @@ function runner(): void {
   console.log(`wrote ${file}`);
 }
 
-if (process.argv.includes("--controls")) {
+// Interleaved A/A run: every row is measured in 2 * PROCESSES child processes
+// that alternate between the tags aa1 and aa2, so slow drift of the machine
+// (CPU frequency, temperature, other load) hits both tags equally. Two
+// back-to-back full runs do not have that property.
+function runnerInterleavedAA(): void {
+  const groupsArg = process.argv.find((a) => a.startsWith("--groups="));
+  const groups = groupsArg ? new Set(groupsArg.slice("--groups=".length).split(",")) : null;
+  mkdirSync(RESULTS_DIR, { recursive: true });
+  const defs = buildRows().filter((d) => groups === null || groups.has(d.group));
+  const out = [new Map<string, Record<string, unknown>>(), new Map<string, Record<string, unknown>>()];
+  console.log(`interleaved A/A: ${defs.length} rows x ${2 * PROCESSES} processes`);
+  let i = 0;
+  for (const def of defs) {
+    i++;
+    const per = runRowInChildren(def, 2 * PROCESSES);
+    out[0].set(def.id, aggregate(def, per.filter((_, k) => k % 2 === 0)));
+    out[1].set(def.id, aggregate(def, per.filter((_, k) => k % 2 === 1)));
+    console.log(`[${i}/${defs.length}] ${def.id}`);
+  }
+  writeOut(`${RESULTS_DIR}runtime-micro.aa1.json`, "aa1", out[0]);
+  writeOut(`${RESULTS_DIR}runtime-micro.aa2.json`, "aa2", out[1]);
+}
+
+if (process.argv.includes("--aa-interleaved")) {
+  runnerInterleavedAA();
+} else if (process.argv.includes("--controls")) {
   const zero = await allocBytesPerOp(() => {
     let s = 0;
     for (let i = 0; i < 100; i++) s += i;

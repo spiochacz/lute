@@ -26,6 +26,8 @@ import * as parse from "./parse/index.ts";
 import * as render from "./render/index.ts";
 import * as util from "./util/index.ts";
 import { Lute } from "./types.ts";
+// PORT-NOTE: hook for the per-child cache (tasks/004), no behaviour change: the only import of src/incremental/.
+import { incrementalActive, tryIncrementalDom2Md } from "./incremental/dispatch.ts";
 
 declare module "./types.ts" {
   interface Lute {
@@ -111,22 +113,37 @@ Lute.prototype.VditorIRDOM2Md = function (this: Lute, htmlStr: string): string {
   const lute = this;
   let markdown = "";
   htmlStr = strings.ReplaceAll(htmlStr, editor.Zwsp, "");
+  // PORT-NOTE: hook for the per-child cache (tasks/004), no behaviour change: with no engine having the cache enabled this is one integer test.
+  if (0 !== incrementalActive.count) {
+    const composed = tryIncrementalDom2Md(lute, "ir", htmlStr);
+    if (null !== composed) {
+      markdown = strings.ReplaceAll(composed, editor.Zwsp, "");
+      return markdown;
+    }
+  }
   markdown = lute.vditorIRDOM2Md(htmlStr);
   markdown = strings.ReplaceAll(markdown, editor.Zwsp, "");
   return markdown;
 };
 
-// vditorIRDOM2MdPrepare is the first stage of vditorIRDOM2Md: it removes the caret, normalises the trailing white space, parses the string into a DOM tree
-// and adjusts the DOM. It returns null where vditorIRDOM2Md returns its empty result before any rendering.
-// PORT-NOTE: hook for the per-child cache (tasks/004), no behaviour change: the stages of vditorIRDOM2Md are functions of their own, so that the
-// recording renderer (render/recording_format_renderer.ts) runs the same stages; they are exported for tests and are not methods of Lute.
-export function vditorIRDOM2MdPrepare(lute: Lute, htmlStr: string): html.Node | null {
+// vditorIRDOM2MdPreprocess removes the caret and normalises the trailing white space of the input string.
+// PORT-NOTE: hook for the per-child cache (tasks/004), no behaviour change: see vditorIRDOM2MdPrepare.
+export function vditorIRDOM2MdPreprocess(htmlStr: string): string {
   // Remove the caret
   htmlStr = strings.ReplaceAll(htmlStr, "<wbr>", "");
 
   // Replace trailing whitespace, otherwise the HTML parsing produces redundant nodes that lead to empty code blocks
   htmlStr = strings.ReplaceAll(htmlStr, "\t\n", "\n");
   htmlStr = strings.ReplaceAll(htmlStr, "    \n", "  \n");
+  return htmlStr;
+}
+
+// vditorIRDOM2MdPrepare is the first stage of vditorIRDOM2Md: it removes the caret, normalises the trailing white space, parses the string into a DOM tree
+// and adjusts the DOM. It returns null where vditorIRDOM2Md returns its empty result before any rendering.
+// PORT-NOTE: hook for the per-child cache (tasks/004), no behaviour change: the stages of vditorIRDOM2Md are functions of their own, so that the
+// recording renderer (render/recording_format_renderer.ts) runs the same stages; they are exported for tests and are not methods of Lute.
+export function vditorIRDOM2MdPrepare(lute: Lute, htmlStr: string): html.Node | null {
+  htmlStr = vditorIRDOM2MdPreprocess(htmlStr);
 
   // Parse the string into a DOM tree
   const htmlRoot = util.ParseHTML(htmlStr);
@@ -154,7 +171,15 @@ export function vditorIRDOM2MdBuildTree(lute: Lute, htmlRoot: html.Node): parse.
   }
 
   // Adjust the tree structure
-  ast.Walk(tree.Root, (n: ast.Node, entering: boolean): ast.WalkStatus => {
+  vditorIRDOM2MdAdjustTree(tree);
+
+  return tree;
+}
+
+// vditorIRDOM2MdAdjustTree adjusts the structure of the Markdown syntax tree built by vditorIRDOM2MdBuildTree.
+// PORT-NOTE: hook for the per-child cache (tasks/004), no behaviour change: see vditorIRDOM2MdPrepare.
+export function vditorIRDOM2MdAdjustTree(tree: parse.Tree): void {
+  ast.Walk(tree.Root!, (n: ast.Node, entering: boolean): ast.WalkStatus => {
     if (entering) {
       switch (n.Type) {
         case ast.NodeInlineHTML:
@@ -183,8 +208,6 @@ export function vditorIRDOM2MdBuildTree(lute: Lute, htmlRoot: html.Node): parse.
     }
     return ast.WalkContinue;
   });
-
-  return tree;
 }
 
 // vditorIRDOM2MdRenderOptions returns the options of the Markdown formatter that vditorIRDOM2Md renders with.

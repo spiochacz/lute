@@ -173,3 +173,27 @@ test("step 4: the certificate refuses at least one child of every opaque-disagre
   }
   process.stdout.write(report.join("\n") + "\n");
 });
+
+// Deviation 5 (tasks/004, Milestone B implementation): the last token of the boundary is recorded after the original parseCurrentToken
+// call, because the parser processes implied tokens re-entrantly. Before the fix, a <hr> child (whose processing creates implied
+// html, head and body tokens) reported the implied <body> as its last token and was refused; these tests pin the fixed behaviour and the
+// condition-2 refusal of a child whose last token is not its own end tag. It corrects the sentence of section 4.1 that records the token
+// before delegating.
+test("deviation 5: a non-opaque <hr> child is certified (its last token is the hr start tag)", () => {
+  for (const child of ['<hr data-block="0" />', "<hr>", "<hr/>"]) {
+    const r = parseWithBoundary(child);
+    assert.equal(r.boundary!.lastTokData, "hr", child);
+    assert.equal(certify(child, r.doc, r.boundary), null, child);
+  }
+});
+
+test("condition 2: a child whose real last token is not its own end tag is refused", () => {
+  const child = '<div data-type="x">a</div>';
+  const r = parseWithBoundary(child);
+  assert.equal(certify(child, r.doc, r.boundary), null, "the real boundary is certified");
+  assert.equal(r.boundary!.lastTokData, "div");
+  const wrongEnd = { ...r.boundary!, lastTokData: "p" };
+  assert.equal(certify(child, r.doc, wrongEnd), "last-token");
+  const notEnd = { ...r.boundary!, lastTokType: html.StartTagToken };
+  assert.equal(certify(child, r.doc, notEnd), "last-token", "a start tag does not close a non-void element");
+});

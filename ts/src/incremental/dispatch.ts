@@ -23,3 +23,20 @@ export function registerIncrementalHandler(h: IncrementalHandler | null): void {
 export function tryIncrementalDom2Md(lute: Lute, mode: IncrementalMode, html: string): string | null {
   return handler === null ? null : handler(lute, mode, html);
 }
+
+// The state of each engine with the cache enabled (the module state of section 7.2; no field is added to Lute).
+// PORT-NOTE: the registry is a WeakMap so that a dropped engine releases its cache.
+const registry = new WeakMap<Lute, unknown>();
+
+export function getState<T>(lute: Lute): T | undefined {
+  return registry.get(lute) as T | undefined;
+}
+
+export function setState<T>(lute: Lute, st: T): void {
+  registry.set(lute, st);
+}
+
+// deleteState removes the state; it returns whether the engine had one.
+export function deleteState(lute: Lute): boolean {
+  return registry.delete(lute);
+}

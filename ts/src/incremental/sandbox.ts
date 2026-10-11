@@ -16,6 +16,7 @@ import type { RootOp } from "../render/recording_format_renderer.ts";
 import { registerFormatRendererFuncs } from "../render/format_renderer.ts";
 import type { Lute } from "../types.ts";
 import { vditorDOM2MdAdjustTree, vditorDOM2MdPreprocess, vditorDOM2MdRenderOptions } from "../vditor_wysiwyg.ts";
+import { vditorIRDOM2MdAdjustTree, vditorIRDOM2MdPreprocess, vditorIRDOM2MdRenderOptions } from "../vditor_ir.ts";
 import type { Options as RenderOptions } from "../render/renderer.ts";
 import { IncrementalInconsistency, BarrierViolation, LASTOUT_PASS } from "./piece.ts";
 import type { ChildInfo, Context, Mode, ReadKey, Refusal, Variant } from "./piece.ts";
@@ -43,6 +44,19 @@ export const WYSIWYG_ADAPTER: ModeAdapter = {
     vditorDOM2MdAdjustTree(tree);
   },
   renderOptions: (): RenderOptions => vditorDOM2MdRenderOptions(),
+};
+
+// IR_ADAPTER is the adapter of the Vditor IR DOM (vditor_ir.ts): the same stages as WYSIWYG_ADAPTER, with the IR functions.
+export const IR_ADAPTER: ModeAdapter = {
+  mode: "ir",
+  preprocess: (h: string): string => vditorIRDOM2MdPreprocess(h),
+  genAST: (lute: Lute, child: html.Node, tree: parse.Tree): void => {
+    lute.genASTByVditorIRDOM(child, tree);
+  },
+  adjustTree: (tree: parse.Tree): void => {
+    vditorIRDOM2MdAdjustTree(tree);
+  },
+  renderOptions: (): RenderOptions => vditorIRDOM2MdRenderOptions(),
 };
 
 // The DOM passes of adjustVditorDOM (vditor_wysiwyg.ts), in the engine's order (section 3.2). scope "root" passes take the root (the body),

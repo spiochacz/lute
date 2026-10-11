@@ -10,6 +10,7 @@ export * from "./protyle_tabs.ts";
 export * from "./vditor_ir.ts";
 export * from "./vditor_sv.ts";
 export * from "./vditor_wysiwyg.ts";
+export * from "./incremental/index.ts";
 export { makeGlobal } from "./global.ts";
 export type { LuteGlobal } from "./global.ts";
 export * as ast from "./ast/index.ts";

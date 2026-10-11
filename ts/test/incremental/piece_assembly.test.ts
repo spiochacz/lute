@@ -13,7 +13,7 @@ import * as conv from "../../src/runtime/conv.ts";
 import * as lex from "../../src/lex/index.ts";
 import * as parse from "../../src/parse/index.ts";
 import { scanTopLevel } from "../../src/incremental/scanner.ts";
-import { runChild, listCoupling, WYSIWYG_ADAPTER } from "../../src/incremental/sandbox.ts";
+import { runChild, listCoupling, WYSIWYG_ADAPTER, IR_ADAPTER } from "../../src/incremental/sandbox.ts";
 import type { ModeAdapter } from "../../src/incremental/sandbox.ts";
 import { LASTOUT_PASS } from "../../src/incremental/piece.ts";
 import type { ChildInfo, Context, ReadKey, Variant } from "../../src/incremental/piece.ts";
@@ -136,34 +136,60 @@ export function assemble(lute: Lute, adapter: ModeAdapter, h: string): Assembled
   return { text: conv.StringFromBytes(R.Writer.Bytes()), reason: null };
 }
 
-test("piece assembly equals VditorDOM2Md on 30 WYSIWYG corpus documents", () => {
+// The whole WYSIWYG corpus (every accepted document of auditDocuments, opaque children included: a refused document is counted by its reason and
+// must not be an inconsistency). The run is about the time of one npm test budget; the number of documents compared is printed.
+test("piece assembly equals VditorDOM2Md on the whole WYSIWYG corpus (accepted documents)", () => {
   const lute: Lute = New();
   const docs = auditDocuments().filter((d) => d.mode === "wysiwyg");
   let compared = 0;
-  let refused = 0;
+  const refused = new Map<string, number>();
   for (const doc of docs) {
-    if (compared >= 30) {
-      break;
-    }
     const sc = scanTopLevel(doc.html);
     if (!sc.ok) {
       continue;
     }
-    if (sc.children.some((c) => c.opaque)) {
-      continue; // the opaque children are refused by the certificate (step 4), a separate test
-    }
     const got = assemble(lute, WYSIWYG_ADAPTER, doc.html);
     if (got.text === null) {
-      refused++;
+      refused.set(got.reason!, (refused.get(got.reason!) ?? 0) + 1);
       continue;
     }
-    // doc.html is already stripped of ZWSP and preprocessed, the engine's public method is the reference
     const want = lute.VditorDOM2Md(doc.html.split(editor.Zwsp).join(""));
     if (want !== got.text.split(editor.Zwsp).join("")) {
-      throw new Error(`${doc.name}: piece assembly differs\nassembled: ${JSON.stringify(got.text)}\nengine:    ${JSON.stringify(want)}\nhtml: ${doc.html}`);
+      throw new Error(`${doc.name}: piece assembly differs
+assembled: ${JSON.stringify(got.text)}
+engine:    ${JSON.stringify(want)}
+html: ${doc.html}`);
     }
     compared++;
   }
-  assert.ok(compared >= 20, `only ${compared} documents compared`);
-  process.stdout.write(`piece assembly: ${compared} documents equal, ${refused} refused\n`);
+  assert.ok(compared >= 500, `only ${compared} documents compared`);
+  process.stdout.write(`piece assembly (WYSIWYG): ${compared} documents equal; refused by reason ${JSON.stringify(Object.fromEntries(refused))}
+`);
+});
+
+// Step 8: the same harness for the IR DOM. A document that is refused with tip-open (indented code in IR, section 1.2 S5) is skipped with
+// its reason asserted; any other refusal is counted, and a mismatch of an assembled document is a STOP.
+test("piece assembly equals VditorIRDOM2Md on the whole IR corpus (accepted documents)", () => {
+  const lute: Lute = New();
+  const docs = auditDocuments().filter((d) => d.mode === "ir");
+  let compared = 0;
+  const refused = new Map<string, number>();
+  for (const doc of docs) {
+    const sc = scanTopLevel(doc.html);
+    if (!sc.ok) {
+      continue;
+    }
+    const got = assemble(lute, IR_ADAPTER, doc.html);
+    if (got.text === null) {
+      refused.set(got.reason!, (refused.get(got.reason!) ?? 0) + 1);
+      continue;
+    }
+    const want = lute.VditorIRDOM2Md(doc.html.split(editor.Zwsp).join(""));
+    if (want !== got.text.split(editor.Zwsp).join("")) {
+      throw new Error(`${doc.name}: IR piece assembly differs\nassembled: ${JSON.stringify(got.text)}\nengine:    ${JSON.stringify(want)}\nhtml: ${doc.html}`);
+    }
+    compared++;
+  }
+  assert.ok(compared >= 500, `only ${compared} IR documents compared`);
+  process.stdout.write(`piece assembly (IR): ${compared} documents equal; refused by reason ${JSON.stringify(Object.fromEntries(refused))}\n`);
 });

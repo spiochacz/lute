@@ -23,7 +23,7 @@ import * as lex from "../lex/index.ts";
 import * as parse from "../parse/index.ts";
 import * as util from "../util/index.ts";
 import { BaseRenderer, ProtyleExportMdRenderer } from "./types.ts";
-import { NoHighlight, nodeTokens } from "./renderer.ts";
+import { NoHighlight, nodeTokens, setWriterFromOwn } from "./renderer.ts";
 import type { Options } from "./renderer.ts";
 import { calloutTitle } from "./callout.ts";
 import { isCJK } from "./space.ts";
@@ -1843,8 +1843,9 @@ ProtyleExportMdRenderer.prototype.renderDocument = function (this: ProtyleExport
     } else {
       buf = bytes.Trim(r.Writer.Bytes(), " \t\n");
     }
-    r.Writer.Reset();
-    r.Write(buf);
+    // PORT-NOTE: perf, departs from 1:1 (render/protyle_export_md_renderer.go:1520): setWriterFromOwn moves buf to the start of
+    // r.Writer's storage and cuts the length, instead of Reset and Write of the same bytes. The content and LastOut are the same.
+    setWriterFromOwn(r, buf);
     r.WriteByte(lex.ItemNewline);
   }
   return ast.WalkContinue;
@@ -2323,8 +2324,8 @@ ProtyleExportMdRenderer.prototype.renderBlockquote = function (this: ProtyleExpo
     r.NodeWriterStack[r.NodeWriterStack.length - 1].Write(writer.Bytes());
     r.Writer = r.NodeWriterStack[r.NodeWriterStack.length - 1];
     buf = bytes.TrimSpace(r.Writer.Bytes());
-    r.Writer.Reset();
-    r.Write(buf);
+    // PORT-NOTE: perf, departs from 1:1 (render/protyle_export_md_renderer.go:1963): setWriterFromOwn, see renderDocument; the content and LastOut are the same.
+    setWriterFromOwn(r, buf);
     if (!node.ParentIs(ast.NodeTableCell)) { // A line break is not allowed in a table, otherwise the table layout breaks https://github.com/Vanessa219/vditor/issues/368
       if (r.withoutKramdownBlockIAL(node)) {
         r.WriteString("\n\n");
@@ -2391,8 +2392,8 @@ ProtyleExportMdRenderer.prototype.renderList = function (this: ProtyleExportMdRe
     r.NodeWriterStack[r.NodeWriterStack.length - 1].Write(writer.Bytes());
     r.Writer = r.NodeWriterStack[r.NodeWriterStack.length - 1];
     const buf = bytes.TrimSpace(r.Writer.Bytes());
-    r.Writer.Reset();
-    r.Write(buf);
+    // PORT-NOTE: perf, departs from 1:1 (render/protyle_export_md_renderer.go:2026): setWriterFromOwn, see renderDocument; the content and LastOut are the same.
+    setWriterFromOwn(r, buf);
     if (!node.ParentIs(ast.NodeTableCell)) {
       if (r.withoutKramdownBlockIAL(node)) {
         r.WriteString("\n\n");
@@ -2472,8 +2473,8 @@ ProtyleExportMdRenderer.prototype.renderListItem = function (this: ProtyleExport
     r.NodeWriterStack[r.NodeWriterStack.length - 1].Write(buf);
     r.Writer = r.NodeWriterStack[r.NodeWriterStack.length - 1];
     buf = bytes.TrimSpace(r.Writer.Bytes());
-    r.Writer.Reset();
-    r.Write(buf);
+    // PORT-NOTE: perf, departs from 1:1 (render/protyle_export_md_renderer.go:2106): setWriterFromOwn, see renderDocument; the content and LastOut are the same.
+    setWriterFromOwn(r, buf);
     if (!node.ParentIs(ast.NodeTableCell)) {
       r.WriteString("\n");
     }

@@ -23,7 +23,7 @@ import * as lex from "../lex/index.ts";
 import * as parse from "../parse/index.ts";
 import * as util from "../util/index.ts";
 import { BaseRenderer, FormatRenderer } from "./types.ts";
-import { nodeTokens } from "./renderer.ts";
+import { nodeTokens, setWriterFromOwn } from "./renderer.ts";
 import type { Options } from "./renderer.ts";
 import { calloutTitle } from "./callout.ts";
 import { escapeSetextHeadingMarkersInListParagraph } from "./setext.ts";
@@ -1397,9 +1397,9 @@ FormatRenderer.prototype.renderDocument = function (this: FormatRenderer, node: 
     } else {
       buf = bytes.Trim(r.Writer.Bytes(), blankTrimChars);
     }
-    // PORT-NOTE: buf aliases the storage of r.Writer; Reset keeps the storage and Write copies with memmove semantics (TypedArray.set), as in Go.
-    r.Writer.Reset();
-    r.Write(buf);
+    // PORT-NOTE: perf, departs from 1:1 (render/format_renderer.go:1414): setWriterFromOwn moves buf to the start of r.Writer's storage
+    // and cuts the length, instead of Reset and Write of the same bytes. The content and LastOut are the same, and the newline follows.
+    setWriterFromOwn(r, buf);
     r.WriteByte(lex.ItemNewline);
   }
   return ast.WalkContinue;
@@ -1837,9 +1837,8 @@ FormatRenderer.prototype.renderBlockquote = function (this: FormatRenderer, node
     r.NodeWriterStack[r.NodeWriterStack.length - 1].Write(writer.Bytes());
     r.Writer = r.NodeWriterStack[r.NodeWriterStack.length - 1];
     buf = bytes.TrimSpace(r.Writer.Bytes());
-    // PORT-NOTE: buf aliases the storage of r.Writer, see renderDocument.
-    r.Writer.Reset();
-    r.Write(buf);
+    // PORT-NOTE: perf, departs from 1:1 (render/format_renderer.go:1816): setWriterFromOwn, see renderDocument; the content and LastOut are the same.
+    setWriterFromOwn(r, buf);
     if (!node.ParentIs(ast.NodeTableCell)) { // Line breaks are not allowed in a table, or the table layout breaks https://github.com/Vanessa219/vditor/issues/368
       if (r.withoutKramdownBlockIAL(node)) {
         r.WriteString("\n\n");
@@ -1906,9 +1905,8 @@ FormatRenderer.prototype.renderList = function (this: FormatRenderer, node: ast.
     r.NodeWriterStack[r.NodeWriterStack.length - 1].Write(writer.Bytes());
     r.Writer = r.NodeWriterStack[r.NodeWriterStack.length - 1];
     const buf = bytes.TrimSpace(r.Writer.Bytes());
-    // PORT-NOTE: buf aliases the storage of r.Writer, see renderDocument.
-    r.Writer.Reset();
-    r.Write(buf);
+    // PORT-NOTE: perf, departs from 1:1 (render/format_renderer.go:1881): setWriterFromOwn, see renderDocument; the content and LastOut are the same.
+    setWriterFromOwn(r, buf);
     if (!node.ParentIs(ast.NodeTableCell)) {
       if (r.withoutKramdownBlockIAL(node)) {
         r.WriteString("\n\n");
@@ -1990,9 +1988,8 @@ FormatRenderer.prototype.renderListItem = function (this: FormatRenderer, node: 
     r.NodeWriterStack[r.NodeWriterStack.length - 1].Write(buf);
     r.Writer = r.NodeWriterStack[r.NodeWriterStack.length - 1];
     buf = bytes.TrimSpace(r.Writer.Bytes());
-    // PORT-NOTE: buf aliases the storage of r.Writer, see renderDocument.
-    r.Writer.Reset();
-    r.Write(buf);
+    // PORT-NOTE: perf, departs from 1:1 (render/format_renderer.go:1962): setWriterFromOwn, see renderDocument; the content and LastOut are the same.
+    setWriterFromOwn(r, buf);
     if (!node.ParentIs(ast.NodeTableCell)) {
       r.WriteString("\n");
     }

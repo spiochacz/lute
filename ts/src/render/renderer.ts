@@ -537,6 +537,33 @@ BaseRenderer.prototype.NormalizedTaskListItemChecked = function (this: BaseRende
   return marker !== 0x20 /* space */;
 };
 
+// setWriterFromOwn makes the content of r.Writer the trimmed view buf, which is a view of r.Writer's own storage (the result of
+// Trim on r.Writer.Bytes()). It replaces Reset followed by Write(buf): the bytes are moved to the start of the storage and the
+// length is cut, and LastOut is set as Write sets it (to the last byte, unchanged for an empty buf).
+// PORT-NOTE: perf, departs from 1:1 (see each caller): the same bytes are kept without copying them through a second Write; Go
+// and the first port copy the whole buffer onto itself at every container close, which is quadratic in the number of list items.
+export function setWriterFromOwn(r: BaseRenderer, buf: Uint8Array): void {
+  const w = r.Writer;
+  const n = buf.length;
+  if (0 === n) {
+    w.Reset();
+    return;
+  }
+  const all = w.Bytes();
+  if (buf.buffer !== all.buffer) {
+    w.Reset();
+    r.Write(buf);
+    return;
+  }
+  const last = buf[n - 1];
+  const lead = buf.byteOffset - all.byteOffset;
+  if (0 < lead) {
+    all.copyWithin(0, lead, lead + n);
+  }
+  w.Truncate(n);
+  r.LastOut = last;
+}
+
 // NewBaseRenderer constructs a BaseRenderer.
 export function NewBaseRenderer(tree: parse.Tree, options: Options, parseOptions: parse.Options): BaseRenderer {
   // PORT-NOTE: the BaseRenderer constructor (types.ts) does the work of Go's NewBaseRenderer: tables, output buffer, Grow(4096)

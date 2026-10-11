@@ -278,8 +278,13 @@ Lute.prototype.adjustVditorDOM = function (this: Lute, root: html.Node): void {
   lute.removeEmptyNodes(root);
   lute.removeHighlightJSSpans(root);
 
-  for (let c = root.FirstChild; null !== c; c = c.NextSibling) {
-    lute.removeWbr(c);
+  // PORT-NOTE: perf, departs from vditor_wysiwyg.go:179-181: one call instead of a loop over the siblings.
+  // removeWbr(c) already collects the matching wbr nodes of c and of all its following siblings (and their
+  // descendants) and only then unlinks them; a later call would only walk the same nodes again and find
+  // nothing, and the loop ends after a matching FirstChild anyway because Unlink clears NextSibling.
+  // So a single call on root.FirstChild unlinks exactly the same nodes.
+  if (null !== root.FirstChild) {
+    lute.removeWbr(root.FirstChild);
   }
 
   for (let c = root.FirstChild; null !== c; c = c.NextSibling) {

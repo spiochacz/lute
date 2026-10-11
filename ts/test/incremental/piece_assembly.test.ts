@@ -20,6 +20,10 @@ import type { ChildInfo, Context, ReadKey, Variant } from "../../src/incremental
 import { FormatRenderer } from "../../src/render/types.ts";
 import { closeDocumentWriter } from "../../src/render/format_renderer.ts";
 import { auditDocuments } from "./corpus_docs.ts";
+import { FULL, sample } from "../e2e/full.ts";
+
+// The whole corpus in the full run; every 4th document of it in the default run (the minimum of compared documents scales with it).
+const MIN_COMPARED = FULL ? 500 : 125;
 
 const PROVISIONAL: Context = { lastOut: 10, prev: -1, next: -1, isFirst: true, isLast: true, domPrev: -1, domNext: -1, domNextAttrs: 0 };
 
@@ -140,7 +144,7 @@ export function assemble(lute: Lute, adapter: ModeAdapter, h: string): Assembled
 // must not be an inconsistency). The run is about the time of one npm test budget; the number of documents compared is printed.
 test("piece assembly equals VditorDOM2Md on the whole WYSIWYG corpus (accepted documents)", () => {
   const lute: Lute = New();
-  const docs = auditDocuments().filter((d) => d.mode === "wysiwyg");
+  const docs = sample(auditDocuments().filter((d) => d.mode === "wysiwyg"), 0, 4);
   let compared = 0;
   const refused = new Map<string, number>();
   for (const doc of docs) {
@@ -162,7 +166,7 @@ html: ${doc.html}`);
     }
     compared++;
   }
-  assert.ok(compared >= 500, `only ${compared} documents compared`);
+  assert.ok(compared >= MIN_COMPARED, `only ${compared} documents compared`);
   process.stdout.write(`piece assembly (WYSIWYG): ${compared} documents equal; refused by reason ${JSON.stringify(Object.fromEntries(refused))}
 `);
 });
@@ -171,7 +175,7 @@ html: ${doc.html}`);
 // its reason asserted; any other refusal is counted, and a mismatch of an assembled document is a STOP.
 test("piece assembly equals VditorIRDOM2Md on the whole IR corpus (accepted documents)", () => {
   const lute: Lute = New();
-  const docs = auditDocuments().filter((d) => d.mode === "ir");
+  const docs = sample(auditDocuments().filter((d) => d.mode === "ir"), 0, 4);
   let compared = 0;
   const refused = new Map<string, number>();
   for (const doc of docs) {
@@ -190,6 +194,6 @@ test("piece assembly equals VditorIRDOM2Md on the whole IR corpus (accepted docu
     }
     compared++;
   }
-  assert.ok(compared >= 500, `only ${compared} IR documents compared`);
+  assert.ok(compared >= MIN_COMPARED, `only ${compared} IR documents compared`);
   process.stdout.write(`piece assembly (IR): ${compared} documents equal; refused by reason ${JSON.stringify(Object.fromEntries(refused))}\n`);
 });

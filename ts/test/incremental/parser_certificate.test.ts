@@ -17,6 +17,7 @@ import {
 import * as html from "../../src/html/index.ts";
 import * as util from "../../src/util/index.ts";
 import { auditDocuments, OPAQUE_DISAGREEMENTS_EXPECTED } from "./corpus_docs.ts";
+import { sample } from "../e2e/full.ts";
 
 test("REF is the state in body content after <hr> (section 4.2)", () => {
   const ref = REF();
@@ -37,7 +38,7 @@ test("REF is the state in body content after <hr> (section 4.2)", () => {
 });
 
 test("bodyOf of the certified parse serialises like util.ParseHTML", () => {
-  for (const doc of auditDocuments().slice(0, 400)) {
+  for (const doc of sample(auditDocuments(), 0, 4)) {
     const s = doc.html;
     const viaCert = bodyOf(parseWithBoundary(s).doc);
     const viaUtil = util.ParseHTML(s);
@@ -95,7 +96,7 @@ test("every non-opaque scanner child is certified, and its alone parse equals th
   let certified = 0;
   let opaqueRefused = 0;
   let sandwiched = 0;
-  for (const doc of acceptedDocs()) {
+  for (const doc of sample(acceptedDocs(), 0, 4)) {
     const whole = util.ParseHTML(doc.html);
     const tops: html.Node[] = [];
     for (let c = whole === null ? null : whole.FirstChild; c !== null; c = c.NextSibling) {

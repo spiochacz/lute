@@ -1,0 +1,20 @@
+// The very first conversion in a fresh process (includes JIT warm-up of the code paths it touches).
+import { readFileSync } from "node:fs";
+import { performance } from "node:perf_hooks";
+import { CONFIGS, engines } from "../corpus.ts";
+import { editor } from "../../../src/index.ts";
+import { EnableIncrementalDom2Md } from "../../../src/incremental/index.ts";
+import { WYSIWYG_ADAPTER } from "../../../src/incremental/sandbox.ts";
+import { vditorDOM2MdPreprocess } from "../../../src/vditor_wysiwyg.ts";
+import { Cache, compose } from "./fast.ts";
+const which = process.argv[2];
+const raw = readFileSync(`${process.env.FIX}/spec.wysiwyg.html`, "utf8").split(editor.Zwsp).join("");
+const { port } = engines(CONFIGS[0], "wysiwyg");
+if (which === "src") EnableIncrementalDom2Md(port);
+const h = vditorDOM2MdPreprocess(raw);
+const t = performance.now();
+if (which === "fast") compose(port, WYSIWYG_ADAPTER, new Cache(), h); else port.VditorDOM2Md(raw);
+const first = performance.now() - t;
+const t2 = performance.now();
+if (which === "fast") compose(port, WYSIWYG_ADAPTER, new Cache(), h); else port.VditorDOM2Md(raw);
+console.log(which.padEnd(7), "first call", first.toFixed(0), "ms; second call (cold cache again for fast/src? no: src is warm)", (performance.now() - t2).toFixed(0));

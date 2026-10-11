@@ -11,6 +11,7 @@ import * as conv from "../../src/runtime/conv.ts";
 import * as html from "../../src/html/index.ts";
 import * as util from "../../src/util/index.ts";
 import { auditDocuments, OPAQUE_DISAGREEMENTS_EXPECTED } from "./corpus_docs.ts";
+import { sample } from "../e2e/full.ts";
 
 function serialise(n: html.Node): string {
   const w = new bytes.Buffer();
@@ -116,7 +117,10 @@ export interface OpaqueDisagreement {
 }
 
 test("scanner cut agrees with util.ParseHTML over the corpora (ZWSP and caret stripped, engine preprocessing)", () => {
-  const docs = auditDocuments();
+  // every 2nd document, plus the documents of the pinned opaque-disagreement list (the list is compared exactly below)
+  const all = auditDocuments();
+  const sampled = new Set(sample(all.map((_, i) => i), 0, 2));
+  const docs = all.filter((d, i) => sampled.has(i) || OPAQUE_DISAGREEMENTS_EXPECTED.includes(d.name));
   let accepted = 0;
   let refused = 0;
   let children = 0;

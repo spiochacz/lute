@@ -96,6 +96,32 @@ export class VditorSVRenderer extends BaseRenderer {
     }
   }
 
+  // setLastOutSVFromCopy updates LastOutSV as Write(content) does, for a container close that used to write the parent buffer back
+  // into itself through Write. The buffer itself is no longer copied.
+  // PORT-NOTE: perf, departs from 1:1 (render/vditor_sv_renderer.go:881, 1091, 1131, 1266): Go and the first port rewrite the whole
+  // parent buffer at every container close (Reset, then Write of the same bytes), which is quadratic in the number of list items.
+  // Only LastOutSV is observable from that copy, and it is read only by HasSuffix(LastOutSV, NewlineSV) with NewlineSV of 75 bytes.
+  // Up to 1024 bytes the new value is exact. Above that, Write keeps the last total-512 bytes of the stream and this keeps the last
+  // 1024 bytes of the same stream; both hold at least 513 trailing bytes, so every later HasSuffix check gives the same answer.
+  setLastOutSVFromCopy(content: Uint8Array): void {
+    const r = this;
+    const length = content.length;
+    if (0 < length) {
+      const prev = r.LastOutSV;
+      if (prev.length + length <= 1024) {
+        r.LastOutSV = slices.Append(prev, content);
+      } else {
+        const out = new Uint8Array(1024);
+        const fromContent = Math.min(length, 1024);
+        out.set(content.subarray(length - fromContent), 1024 - fromContent);
+        if (fromContent < 1024) {
+          out.set(prev.subarray(prev.length - (1024 - fromContent)), 0);
+        }
+        r.LastOutSV = out;
+      }
+    }
+  }
+
   renderLinkRefDefBlock(node: ast.Node, entering: boolean): ast.WalkStatus {
     return ast.WalkContinue;
   }
@@ -857,9 +883,16 @@ export class VditorSVRenderer extends BaseRenderer {
       r.nodeWriterStack.push(r.Writer);
     } else {
       r.nodeWriterStack = r.nodeWriterStack.slice(0, r.nodeWriterStack.length - 1);
-      const buf = bytes.Trim(r.Writer.Bytes(), " \t\n");
-      r.Writer.Reset();
-      r.Write(buf);
+      // PORT-NOTE: perf, departs from 1:1 (render/vditor_sv_renderer.go:881): the trimmed text is moved to the start of the same
+      // storage and the length is cut, instead of Reset and Write of the same bytes. The content is the same; LastOutSV as in Write.
+      const all = r.Writer.Bytes();
+      const buf = bytes.Trim(all, " \t\n");
+      const lead = 0 < buf.length ? buf.byteOffset - all.byteOffset : 0;
+      if (0 < lead) {
+        all.copyWithin(0, lead, lead + buf.length);
+      }
+      r.Writer.Truncate(buf.length);
+      r.setLastOutSVFromCopy(r.Writer.Bytes());
     }
     return ast.WalkContinue;
   }
@@ -1082,13 +1115,11 @@ export class VditorSVRenderer extends BaseRenderer {
         buf = bytes.TrimSuffix(buf, NewlineSV);
       }
       buf = bytes.ReplaceAll(buf, NewlineSV, slices.Append(NewlineSV, marker));
-      writer.Reset();
-      writer.Write(buf);
-      r.nodeWriterStack[r.nodeWriterStack.length - 1].Write(writer.Bytes());
+      // PORT-NOTE: perf, departs from 1:1 (render/vditor_sv_renderer.go:1091 and 1131): the item is appended to the parent once, without
+      // the self-copy of the parent buffer; see setLastOutSVFromCopy. The bytes of the parent are the same.
+      r.nodeWriterStack[r.nodeWriterStack.length - 1].Write(buf);
       r.Writer = r.nodeWriterStack[r.nodeWriterStack.length - 1];
-      buf = r.Writer.Bytes();
-      r.Writer.Reset();
-      r.Write(buf);
+      r.setLastOutSVFromCopy(r.Writer.Bytes());
       r.Newline();
       r.Write(NewlineSV);
     }
@@ -1124,13 +1155,11 @@ export class VditorSVRenderer extends BaseRenderer {
         buf = bytes.TrimSuffix(buf, NewlineSV);
       }
       buf = bytes.ReplaceAll(buf, NewlineSV, slices.Append(NewlineSV, marker));
-      writer.Reset();
-      writer.Write(buf);
-      r.nodeWriterStack[r.nodeWriterStack.length - 1].Write(writer.Bytes());
+      // PORT-NOTE: perf, departs from 1:1 (render/vditor_sv_renderer.go:1091 and 1131): the item is appended to the parent once, without
+      // the self-copy of the parent buffer; see setLastOutSVFromCopy. The bytes of the parent are the same.
+      r.nodeWriterStack[r.nodeWriterStack.length - 1].Write(buf);
       r.Writer = r.nodeWriterStack[r.nodeWriterStack.length - 1];
-      buf = r.Writer.Bytes();
-      r.Writer.Reset();
-      r.Write(buf);
+      r.setLastOutSVFromCopy(r.Writer.Bytes());
       r.Newline();
       r.Write(NewlineSV);
     }
@@ -1268,13 +1297,11 @@ export class VditorSVRenderer extends BaseRenderer {
       }
       const padding: Uint8Array = conv.BytesFromString("<span data-type=\"padding\">" + strings.Repeat(" ", listData.Padding) + "</span>");
       buf = bytes.ReplaceAll(buf, NewlineSV, slices.Append(NewlineSV, padding));
-      writer.Reset();
-      writer.Write(buf);
-      r.nodeWriterStack[r.nodeWriterStack.length - 1].Write(writer.Bytes());
+      // PORT-NOTE: perf, departs from 1:1 (render/vditor_sv_renderer.go:1266): the item is appended to the parent once, without the
+      // self-copy of the parent buffer, which made list rendering quadratic; see setLastOutSVFromCopy. The bytes of the parent are the same.
+      r.nodeWriterStack[r.nodeWriterStack.length - 1].Write(buf);
       r.Writer = r.nodeWriterStack[r.nodeWriterStack.length - 1];
-      buf = r.Writer.Bytes();
-      r.Writer.Reset();
-      r.Write(buf);
+      r.setLastOutSVFromCopy(r.Writer.Bytes());
       r.Write(NewlineSV);
     }
     return ast.WalkContinue;

@@ -31,6 +31,10 @@ import { directDOMChildByClass, hasDOMClass, unwrapTabItemFragments, wrapTabItem
 // emptyBytes stands in for a nil []byte that is only read.
 const emptyBytes: Uint8Array = new Uint8Array(0);
 
+// PORT-NOTE: perf, departs from 1:1 (protyle.go:418, BlockDOM2Tree): nbspBytes and spaceBytes are the two arguments of the text node replacement, converted once instead of once per text node. They are shared by all calls and are only read: bytes.ReplaceAllOrNil copies its replacement into the result and never keeps or writes the array.
+const nbspBytes: Uint8Array = conv.BytesFromString(" ");
+const spaceBytes: Uint8Array = conv.BytesFromString(" ");
+
 declare module "./types.ts" {
   interface Lute {
     SpinBlockDOM(ivHTML: string): string;
@@ -525,7 +529,7 @@ Lute.prototype.BlockDOM2Tree = function (this: Lute, htmlStr: string): parse.Tre
           lute.MergeSameTextMark(n);
           break;
         case ast.NodeText:
-          n.Tokens = bytes.ReplaceAllOrNil(n.Tokens ?? emptyBytes, conv.BytesFromString(" "), conv.BytesFromString(" "));
+          n.Tokens = bytes.ReplaceAllOrNil(n.Tokens ?? emptyBytes, nbspBytes, spaceBytes);
           break;
       }
     }

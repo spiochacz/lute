@@ -27,7 +27,9 @@ import { TabTitleBlockOf, IsTabTitleBlockOf } from "./tabs.ts";
 import type { TableCellRich } from "./table_rich.ts";
 
 // PORT-NOTE: a nil []byte is null only where Go compares it with nil (Tokens, CodeBlockCloseFence). Elsewhere a Go nil slice is an empty Uint8Array.
-// emptyBytes stands in for a nil Tokens in read-only code. It has no capacity, so slices.Append always allocates for it.
+// emptyBytes stands in for a nil Tokens in read-only code, and is the shared value of the byte fields that Go leaves as nil or empty
+// (CodeBlockOpenFence, CodeBlockInfo, LinkRefLabel, FootnotesRefLabel, HtmlEntityTokens). It is never written through: it has no
+// elements and no capacity (Cap is 0), so slices.Append always allocates a new array for it, and every write is a no-op as on a fresh array.
 const emptyBytes: Uint8Array = new Uint8Array(0);
 
 // Node describes the node structure.
@@ -35,7 +37,7 @@ const emptyBytes: Uint8Array = new Uint8Array(0);
 //   1. Changing the node type is cheap: only the Type field changes
 //   2. Extensibility is traded for speed
 //
-// PORT-NOTE: `Node` has all of Go's fields and no getters or hot/cold split: that optimisation is deferred.
+// PORT-NOTE: `Node` has all of Go's fields. Only Properties is an accessor (lazily created map); there is no hot/cold split.
 export class Node {
   // Why this is a single struct and not an interface:
   // 1. Changing the node type is cheap: only the Type field changes
@@ -129,7 +131,8 @@ export class Node {
   // Attributes
 
   KramdownIAL: string[][] | null; // Kramdown inline attribute list
-  Properties: Map<string, string>; // Attributes
+  // PORT-NOTE: perf, departs from 1:1 (ast/node.go:123): the Properties map is created on first access (see the Properties accessor below); the field holds null until then.
+  propertiesMap: Map<string, string> | null; // Attributes, created on first access
 
   // Text mark
 
@@ -185,8 +188,9 @@ export class Node {
     this.CodeBlockFenceChar = 0;
     this.CodeBlockFenceLen = 0;
     this.CodeBlockFenceOffset = 0;
-    this.CodeBlockOpenFence = new Uint8Array(0);
-    this.CodeBlockInfo = new Uint8Array(0);
+    // PORT-NOTE: perf, departs from 1:1 (ast/node.go:Node constructor): the five byte fields below share emptyBytes instead of a new empty array each; no field is written through (see emptyBytes).
+    this.CodeBlockOpenFence = emptyBytes;
+    this.CodeBlockInfo = emptyBytes;
     this.CodeBlockCloseFence = null;
     this.HtmlBlockType = 0;
     this.ListData = null;
@@ -198,17 +202,20 @@ export class Node {
     this.TableCellContentMaxWidth = 0;
     this.TableCellRich = null;
     this.LinkType = 0;
-    this.LinkRefLabel = new Uint8Array(0);
+    // PORT-NOTE: perf, departs from 1:1 (ast/node.go:Node constructor): shared emptyBytes, see CodeBlockOpenFence.
+    this.LinkRefLabel = emptyBytes;
     this.HeadingLevel = 0;
     this.HeadingSetext = false;
     this.HeadingNormalizedID = "";
     this.MathBlockDollarOffset = 0;
-    this.FootnotesRefLabel = new Uint8Array(0);
+    // PORT-NOTE: perf, departs from 1:1 (ast/node.go:Node constructor): shared emptyBytes, see CodeBlockOpenFence.
+    this.FootnotesRefLabel = emptyBytes;
     this.FootnotesRefId = "";
     this.FootnotesRefs = [];
-    this.HtmlEntityTokens = new Uint8Array(0);
+    // PORT-NOTE: perf, departs from 1:1 (ast/node.go:Node constructor): shared emptyBytes, see CodeBlockOpenFence.
+    this.HtmlEntityTokens = emptyBytes;
     this.KramdownIAL = null;
-    this.Properties = new Map<string, string>();
+    this.propertiesMap = null;
     this.TextMarkType = "";
     this.TextMarkAHref = "";
     this.TextMarkATitle = "";
@@ -229,6 +236,22 @@ export class Node {
     this.TabItemTitle = "";
     this.CalloutIcon = "";
     this.CalloutIconType = 0;
+  }
+
+  // PORT-NOTE: perf, departs from 1:1 (ast/node.go:123): Properties is an accessor over propertiesMap, and the map is created by the first read or write, so a node that never touches its attributes allocates none. Readers see an empty map, as in Go.
+  // Properties is Go's Properties map.
+  // A reader gets the same empty map Go gives a new node; a write through the setter replaces the map as an assignment does in Go.
+  get Properties(): Map<string, string> {
+    let m = this.propertiesMap;
+    if (null === m) {
+      m = new Map<string, string>();
+      this.propertiesMap = m;
+    }
+    return m;
+  }
+
+  set Properties(m: Map<string, string>) {
+    this.propertiesMap = m;
   }
 
   // EffectiveTaskListItemMarker returns the effective task list item marker character, escaped for use in an HTML attribute value.

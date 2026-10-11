@@ -50,7 +50,7 @@ Every comparison: the engine under test (A, strict) and the reference (B) are ca
 | `warm` | a new engine A for each edit sequence (8 to 28 edits), so that every child of a sequence is first a miss and later a hit with the variants of the sequence |
 | `cold` | a new engine A for each comparison: nothing is reused, so a difference can only come from the current document |
 | `shared` | one engine A per option set for all sequences: entries and variants of unrelated documents are reused |
-| `evict` | one engine A per option set with `maxBytes` = 256 KiB: eviction, the `too-large` fallback and the clear at the bound run constantly. A pass with no eviction is reported as VACUOUS |
+| `evict` | one engine A per option set with `maxBytes` = 32 KiB: eviction, the `too-large` fallback and the clear at the bound run constantly. A pass with no eviction is reported as VACUOUS |
 
 Each pass prints: comparisons, composed and fallback calls, mismatches (by cause), composed-call hits and misses, the engine's evictions, `too-large` fallbacks and inconsistencies (with their reasons). "bytes probed" is not available for the engine (its statistics have no per-miss byte counter; this would need a `ts/src` change). Option toggles (`SetProtyleWYSIWYG`) are applied to both engines at random points of a sequence.
 

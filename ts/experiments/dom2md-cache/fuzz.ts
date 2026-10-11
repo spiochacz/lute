@@ -9,7 +9,7 @@
 //   they are run only for --impl=prototype.
 // --impl=prototype: the spike's CachedDom2Md of cached.ts, or a mutated copy named by $D2M_CACHED (the historical negative controls). No evict pass.
 // Passes: warm (a new engine per sequence), cold (a new engine per comparison), shared (one engine per option set for all sequences) and evict
-//   (one engine per option set with maxBytes = 256 KiB, so that eviction and the too-large path run constantly).
+//   (one engine per option set with maxBytes = 32 KiB, so that eviction and the too-large path run constantly).
 // Outcomes must be equal, exceptions included. An IncrementalInconsistency (strict mode) is a mismatch of cause INCONSISTENCY:<reason> even when
 // the reference throws too. Edits: the shared generator of test/incremental/edit_generator.ts (16 edits; channel children in the mixed picks).
 // --corpus-snapshot=<file> freezes the repository's Markdown and hand-written DOM: the file is written when absent and read when present.
@@ -48,7 +48,7 @@ const IMPL: "engine" | "prototype" = process.argv.includes("--impl=prototype") ?
 // The prototype module, loaded only for --impl=prototype: ./cached.ts, or a mutated copy named by $D2M_CACHED.
 const CachedImpl: (new (lute: Lute, mode: Mode) => Under) | null =
   IMPL === "prototype" ? ((await import(process.env.D2M_CACHED ?? "./cached.ts")) as unknown as { CachedDom2Md: new (lute: Lute, mode: Mode) => Under }).CachedDom2Md : null;
-const EVICT_BYTES = 256 * 1024;
+const EVICT_BYTES = 32 * 1024;
 
 // ---------------------------------------------------------------- RNG
 function mulberry32(a: number): () => number {
@@ -637,7 +637,7 @@ function main(): void {
     const per = Math.max(1, Math.floor(total / (suites.length * passes.length)));
     for (const s of suites) {
       for (const pass of passes) {
-        // shared and evict: one engine per option set, for all sequences of the pass (evict with the 256 KiB bound)
+        // shared and evict: one engine per option set, for all sequences of the pass (evict with the 32 KiB bound)
         const sh = pass === "shared" || pass === "evict" ? makeUnder(s, pass === "evict" ? EVICT_BYTES : undefined) : null;
         if (!passTotals.has(pass)) passTotals.set(pass, newTotals());
         fuzzSuite(s, pass, per, sh, totals, passTotals.get(pass)!, ctx);

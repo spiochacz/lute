@@ -178,11 +178,10 @@ Tree.prototype.mergeText = function (this: Tree, node: ast.Node): void {
         for (let n: ast.Node | null = next; null !== n && ast.NodeText === n.Type; n = n.Next) {
           total += (n.Tokens ?? new Uint8Array(0)).length;
         }
-        // PORT-NOTE: pre-sized capacity above 64 bytes is kept (structural change S1): the appends below are slices.AppendInPlaceLikeGo or AppendByteInPlaceLikeGo, the code before S1, so that they write into the pre-sized buffer as Go does.
         let merged: Uint8Array = slices.Make(0, total);
-        merged = slices.AppendInPlaceLikeGo(merged, child.Tokens ?? new Uint8Array(0));
+        merged = slices.Append(merged, child.Tokens ?? new Uint8Array(0));
         while (null !== next && ast.NodeText === next.Type) {
-          merged = slices.AppendInPlaceLikeGo(merged, next.Tokens ?? new Uint8Array(0));
+          merged = slices.Append(merged, next.Tokens ?? new Uint8Array(0));
           next.Unlink();
           next = child.Next;
         }
@@ -194,11 +193,10 @@ Tree.prototype.mergeText = function (this: Tree, node: ast.Node): void {
         for (let n: ast.Node | null = next; null !== n && ast.NodeLinkText === n.Type; n = n.Next) {
           total += (n.Tokens ?? new Uint8Array(0)).length;
         }
-        // PORT-NOTE: pre-sized capacity above 64 bytes is kept (structural change S1): the appends below are slices.AppendInPlaceLikeGo or AppendByteInPlaceLikeGo, the code before S1, so that they write into the pre-sized buffer as Go does.
         let merged: Uint8Array = slices.Make(0, total);
-        merged = slices.AppendInPlaceLikeGo(merged, child.Tokens ?? new Uint8Array(0));
+        merged = slices.Append(merged, child.Tokens ?? new Uint8Array(0));
         while (null !== next && ast.NodeLinkText === next.Type) {
-          merged = slices.AppendInPlaceLikeGo(merged, next.Tokens ?? new Uint8Array(0));
+          merged = slices.Append(merged, next.Tokens ?? new Uint8Array(0));
           next.Unlink();
           next = child.Next;
         }

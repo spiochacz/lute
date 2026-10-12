@@ -7,9 +7,8 @@ import * as escapeEncode from "./escape_encode.ts";
 
 // Differential test of EscapeHTML against oldEscapeHTML, a private copy of the
 // implementation before the counted single allocation (the Go-shaped code with Append
-// calls). The copy uses slices.AppendInPlaceLikeGo, the Append of before structural
-// change S1, because the pre-sized buffer (capacity length+128) is only kept by appends
-// that write in place at every length; EscapeHTML uses the same helper (see its PORT-NOTE).
+// calls). The copy uses the current slices.Append, which is itself checked against its
+// pre-change copy in slices.test.ts.
 
 const amp = conv.BytesFromString("&amp;");
 const lt = conv.BytesFromString("&lt;");
@@ -29,8 +28,8 @@ function oldEscapeHTML(html: Uint8Array): Uint8Array {
           ret = slices.Make(0, length + 128);
           inited = true;
         }
-        ret = slices.AppendInPlaceLikeGo(ret, html.subarray(start, i));
-        ret = slices.AppendInPlaceLikeGo(ret, amp);
+        ret = slices.Append(ret, html.subarray(start, i));
+        ret = slices.Append(ret, amp);
         start = i + 1;
         break;
       case lex.ItemLess:
@@ -38,8 +37,8 @@ function oldEscapeHTML(html: Uint8Array): Uint8Array {
           ret = slices.Make(0, length + 128);
           inited = true;
         }
-        ret = slices.AppendInPlaceLikeGo(ret, html.subarray(start, i));
-        ret = slices.AppendInPlaceLikeGo(ret, lt);
+        ret = slices.Append(ret, html.subarray(start, i));
+        ret = slices.Append(ret, lt);
         start = i + 1;
         break;
       case lex.ItemGreater:
@@ -47,8 +46,8 @@ function oldEscapeHTML(html: Uint8Array): Uint8Array {
           ret = slices.Make(0, length + 128);
           inited = true;
         }
-        ret = slices.AppendInPlaceLikeGo(ret, html.subarray(start, i));
-        ret = slices.AppendInPlaceLikeGo(ret, gt);
+        ret = slices.Append(ret, html.subarray(start, i));
+        ret = slices.Append(ret, gt);
         start = i + 1;
         break;
       case lex.ItemDoublequote:
@@ -56,14 +55,14 @@ function oldEscapeHTML(html: Uint8Array): Uint8Array {
           ret = slices.Make(0, length + 128);
           inited = true;
         }
-        ret = slices.AppendInPlaceLikeGo(ret, html.subarray(start, i));
-        ret = slices.AppendInPlaceLikeGo(ret, quot);
+        ret = slices.Append(ret, html.subarray(start, i));
+        ret = slices.Append(ret, quot);
         start = i + 1;
         break;
     }
   }
   if (inited) {
-    ret = slices.AppendInPlaceLikeGo(ret, html.subarray(start));
+    ret = slices.Append(ret, html.subarray(start));
   }
   return ret;
 }

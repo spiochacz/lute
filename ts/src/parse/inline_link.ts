@@ -36,15 +36,14 @@ Context.prototype.parseInlineLinkDest = function (this: Context, tokens: Uint8Ar
     return [passed, remains, destination];
   }
 
-  // PORT-NOTE: pre-sized capacity above 64 bytes is kept (structural change S1): the appends below are slices.AppendInPlaceLikeGo or AppendByteInPlaceLikeGo, the code before S1, so that they write into the pre-sized buffer as Go does.
   passed = slices.Make(0, 256);
   destination = slices.Make(0, 256);
 
   const isPointyBrackets = lex.ItemLess === tokens[1];
   if (isPointyBrackets) {
     let matchEnd = false;
-    passed = slices.AppendByteInPlaceLikeGo(passed, tokens[0]);
-    passed = slices.AppendByteInPlaceLikeGo(passed, tokens[1]);
+    passed = slices.AppendByte(passed, tokens[0]);
+    passed = slices.AppendByte(passed, tokens[1]);
     let i = 2;
     let size = 1;
     let r = 0;
@@ -59,7 +58,7 @@ Context.prototype.parseInlineLinkDest = function (this: Context, tokens: Uint8Ar
       }
 
       if (token < utf8.RuneSelf) {
-        passed = slices.AppendByteInPlaceLikeGo(passed, token);
+        passed = slices.AppendByte(passed, token);
         dest = new Uint8Array([token]);
       } else {
         dest = new Uint8Array(0);
@@ -67,10 +66,10 @@ Context.prototype.parseInlineLinkDest = function (this: Context, tokens: Uint8Ar
         r = v & 0xFFFFFF;
         size = v >>> 24;
         runes = utf8.RuneBytes(r);
-        passed = slices.AppendInPlaceLikeGo(passed, runes);
+        passed = slices.Append(passed, runes);
         dest = slices.Append(dest, runes);
       }
-      destination = slices.AppendInPlaceLikeGo(destination, dest);
+      destination = slices.Append(destination, dest);
       if (lex.ItemGreater === token && !lex.IsBackslashEscapePunct(tokens, i)) {
         destination = destination.subarray(0, destination.length - 1);
         matchEnd = true;
@@ -84,7 +83,7 @@ Context.prototype.parseInlineLinkDest = function (this: Context, tokens: Uint8Ar
     }
 
     if (lex.ItemGreater === tokens[i + 1] || lex.ItemCloseParen === tokens[i + 1]) {
-      passed = slices.AppendByteInPlaceLikeGo(passed, tokens[i + 1]);
+      passed = slices.AppendByte(passed, tokens[i + 1]);
       remains = tokens.subarray(i + 2);
     } else { // Followed by a space
       remains = tokens.subarray(i + 1);
@@ -101,7 +100,7 @@ Context.prototype.parseInlineLinkDest = function (this: Context, tokens: Uint8Ar
       size = 1;
       const token = tokens[i];
       if (token < utf8.RuneSelf) {
-        passed = slices.AppendByteInPlaceLikeGo(passed, token);
+        passed = slices.AppendByte(passed, token);
         dest = new Uint8Array([token]);
       } else {
         dest = new Uint8Array(0);
@@ -109,10 +108,10 @@ Context.prototype.parseInlineLinkDest = function (this: Context, tokens: Uint8Ar
         r = v & 0xFFFFFF;
         size = v >>> 24;
         runes = utf8.RuneBytes(r);
-        passed = slices.AppendInPlaceLikeGo(passed, runes);
+        passed = slices.Append(passed, runes);
         dest = slices.Append(dest, runes);
       }
-      destination = slices.AppendInPlaceLikeGo(destination, dest);
+      destination = slices.Append(destination, dest);
       if (!destStarted && !lex.IsWhitespace(token) && 0 < i) {
         destStarted = true;
         destination = destination.subarray(1);

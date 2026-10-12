@@ -299,9 +299,7 @@ Context.prototype.parseTable0 = function (this: Context, tokens: Uint8Array): as
           th.TableCellAlign = align;
         }
         // UPSTREAM-BUG: ialTokens is a view of th.Tokens, and this append moves the text that follows the IAL over it in place, so the KramdownSpanIAL node gets corrupted tokens when text follows the IAL in the cell (e.g. `| a {: style="color:red"} b |`)
-        // PORT-NOTE: the in-place write is what Go does, and the tree vectors record its bytes. It must happen for any length of th.Tokens, so this
-        // uses slices.AppendInPlaceLikeGo, not Append (structural change S1: a small Append does not write in place).
-        th.Tokens = slices.AppendInPlaceLikeGo(th.Tokens!.subarray(0, ialStart), th.Tokens!.subarray(ialStart + ialTokens.length));
+        th.Tokens = slices.Append(th.Tokens!.subarray(0, ialStart), th.Tokens!.subarray(ialStart + ialTokens.length));
         const spanIAL = new ast.Node(ast.NodeKramdownSpanIAL, ialTokens);
         th.InsertAfter(spanIAL);
         th = th.Next!;
@@ -337,8 +335,7 @@ Context.prototype.parseTable0 = function (this: Context, tokens: Uint8Array): as
             th.TableCellAlign = align;
           }
           // UPSTREAM-BUG: same aliasing as above, ialTokens is overwritten in place by the text that follows the IAL
-          // PORT-NOTE: same in-place write as above, through slices.AppendInPlaceLikeGo (see the head row site).
-          th.Tokens = slices.AppendInPlaceLikeGo(th.Tokens!.subarray(0, ialStart), th.Tokens!.subarray(ialStart + ialTokens.length));
+          th.Tokens = slices.Append(th.Tokens!.subarray(0, ialStart), th.Tokens!.subarray(ialStart + ialTokens.length));
           const spanIAL = new ast.Node(ast.NodeKramdownSpanIAL, ialTokens);
           th.InsertAfter(spanIAL);
           th = th.Next!;

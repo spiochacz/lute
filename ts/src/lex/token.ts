@@ -123,26 +123,16 @@ export function IsBlank(tokens: Uint8Array): boolean {
   return true;
 }
 
-// splitElement returns the element tokens[from:to] as a new slice. Its length is to-from. Its capacity is the one that
-// the byte-by-byte slices.AppendByte loop of the Go original gives it (slices.CapAfterByteAppends), so a later append to
-// the element behaves the same, for elements above 64 bytes. An element of at most 64 bytes has capacity equal to its
-// length (structural change S1: a small slice is never appended in place), and CapAfterByteAppends gives that too, so
-// the same call covers both. An empty element is new Uint8Array(0), as in the original.
-// PORT-NOTE: perf, departs from lex/token.go (structural change S1): an element of at most 64 bytes is copied with a loop,
-// because tokens.subarray would materialise the ArrayBuffer of an on-heap tokens array.
+// splitElement returns the element tokens[from:to] as a new slice. Its length is to-from and its capacity is the one
+// that the byte-by-byte slices.AppendByte loop of the Go original gives it (slices.CapAfterByteAppends), so that a
+// later append to the element behaves the same. An empty element is new Uint8Array(0), as in the original.
 function splitElement(tokens: Uint8Array, from: number, to: number): Uint8Array {
   const n = to - from;
   if (0 === n) {
     return new Uint8Array(0);
   }
   const element = slices.Make(n, slices.CapAfterByteAppends(n));
-  if (n <= 64) {
-    for (let k = 0; k < n; k++) {
-      element[k] = tokens[from + k];
-    }
-  } else {
-    element.set(tokens.subarray(from, to), 0);
-  }
+  element.set(tokens.subarray(from, to), 0);
   return element;
 }
 
@@ -495,9 +485,7 @@ export function EscapeCommonMarkers(tokens: Uint8Array): Uint8Array {
     if (IsCommonInlineMarker(tokens[i])) {
       const remains = slices.Append(new Uint8Array([ItemBackslash]), tokens.subarray(i));
       tokens = tokens.subarray(0, i);
-      // PORT-NOTE: Go appends remains into the spare capacity of the caller's tokens, which overwrites the caller's bytes after i (the
-      // dynamic audit found non-zero bytes overwritten here), so this uses slices.AppendInPlaceLikeGo, the pre-S1 code.
-      tokens = slices.AppendInPlaceLikeGo(tokens, remains);
+      tokens = slices.Append(tokens, remains);
       i++;
     }
   }
@@ -510,8 +498,7 @@ export function EscapeProtyleMarkers(tokens: Uint8Array): Uint8Array {
     if (IsProtyleInlineMarker(tokens[i])) {
       const remains = slices.Append(new Uint8Array([ItemBackslash]), tokens.subarray(i));
       tokens = tokens.subarray(0, i);
-      // PORT-NOTE: same in-place append as EscapeCommonMarkers, through slices.AppendInPlaceLikeGo.
-      tokens = slices.AppendInPlaceLikeGo(tokens, remains);
+      tokens = slices.Append(tokens, remains);
       i++;
     }
   }

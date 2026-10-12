@@ -185,17 +185,16 @@ Context.prototype.parseFileAnnotationRefID = function (this: Context, tokens: Ui
   if (2 > remains.length) {
     return [passed, remains, id];
   }
-  // PORT-NOTE: pre-sized capacity above 64 bytes is kept (structural change S1): the appends below are slices.AppendInPlaceLikeGo or AppendByteInPlaceLikeGo, the code before S1, so that they write into the pre-sized buffer as Go does.
   passed = slices.Make(0, 1024);
-  passed = slices.AppendInPlaceLikeGo(passed, id);
+  passed = slices.Append(passed, id);
   // UPSTREAM-BUG: dead code. The scan loop above stops only on ' "' or '>' and skips every caret byte, so remains never starts with the caret (parse/file_annotation_ref.go:160).
   if (bytes.HasPrefix(remains, editor.CaretTokens)) {
-    passed = slices.AppendInPlaceLikeGo(passed, editor.CaretTokens);
+    passed = slices.Append(passed, editor.CaretTokens);
     remains = remains.subarray(editor.CaretTokens.length);
   }
   const closed = lex.ItemGreater === remains[0] && lex.ItemGreater === remains[1];
   if (closed) {
-    passed = slices.AppendInPlaceLikeGo(passed, greaterPair);
+    passed = slices.Append(passed, greaterPair);
     return [passed, remains, id];
   }
 

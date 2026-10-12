@@ -19,14 +19,17 @@
 //   (relative to the larger), otherwise 'X.XXx more' or 'X.XXx less'.
 // - Spread: max / min over the processes of one impl. Flagged UNSTABLE above 1.5.
 // - A zero or non-finite time is printed as DEFECT, never dropped.
-// - Processes discarded by the canary rule (bench/lib/canary.ts) are left out: the
-//   row statistics are over the kept processes (processesUsed). An impl with no kept
-//   process gets NO VERDICT, and so does every impl compared with such a baseline.
-//   The line says how many processes were discarded. Old files have no processesUsed
-//   and are read as before.
+// - Processes discarded by the canary rules (bench/lib/canary.ts) are left out: the
+//   row statistics are over the kept processes (processesUsed). The rules are applied
+//   again here, to the per-process canaries of the file, so the current rule reads old
+//   files too. An impl with no kept process gets NO VERDICT, and so does every impl compared
+//   with such a baseline. An impl with fewer than 3 kept processes is marked WEAK. The line
+//   says how many processes were discarded. Old files have no per-process data and keep
+//   their stored processesUsed.
 
 import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { judgeRun, type Judged } from "./lib/canary.ts";
 
 const RESULTS = fileURLToPath(new URL("./results/", import.meta.url));
 const SAME_TIME = 0.2;
@@ -46,8 +49,22 @@ interface Row {
   unit: string;
   processes?: number;
   processesUsed?: number;
+  weak?: boolean;
+  perProcess?: Judged[];
   nsPerUnit: Stat;
   bytesPerOp: { median: number } | null;
+}
+
+// Re-judges every row that has per-process canaries with the current rule (bench/lib/canary.ts), so
+// that a file written under an older rule is read under the current one. Rows without perProcess
+// (files before the per-process data) keep their stored processesUsed.
+function rejudge(rows: Row[]): void {
+  const judged = rows.filter((r): r is Row & { perProcess: Judged[] } => r.perProcess !== undefined);
+  const { weak } = judgeRun(judged.map((r) => r.perProcess));
+  judged.forEach((r, i) => {
+    r.processesUsed = r.perProcess.filter((p) => !p.discarded).length;
+    r.weak = weak[i];
+  });
 }
 
 // Processes not discarded by the canary rule. Old files (no processesUsed) count every process.
@@ -77,6 +94,7 @@ if (!existsSync(file)) {
   fail(`missing ${file}`);
 }
 const rows = (JSON.parse(readFileSync(file, "utf8")) as { rows: Row[] }).rows;
+rejudge(rows);
 
 const groups = new Map<string, Row[]>();
 for (const r of rows) {
@@ -148,7 +166,7 @@ for (const key of keys) {
     if (used === 0) {
       return `${r.impl} NO VERDICT (all ${run} processes discarded)`;
     }
-    const discardNote = used < run ? `, ${run - used} of ${run} processes discarded` : "";
+    const discardNote = (used < run ? `, ${run - used} of ${run} processes discarded` : "") + (r.weak === true ? ", WEAK (fewer than 3 kept)" : "");
     const fmtd = isDefect(r) ? "DEFECT" : `${fmtNs(r.nsPerUnit.fastest)} ${r.unit}`;
     const bytes = r.bytesPerOp === null ? "null" : String(Math.round(r.bytesPerOp.median));
     const spread = r.nsPerUnit.spread;

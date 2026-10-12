@@ -1040,3 +1040,11 @@ Every row with a verdict is faster on the port in both tables. Both sides moved 
 
 
 The ratios of this table are the ones to use for comparisons; the absolute times depend on the state of the machine at the moment of each process.
+
+## Benchmark discard rule loosened (2026-10-12)
+
+The first canary rule discarded a process whose start canary was more than 1.3 times the fastest start canary of the whole run. On the data of 1,608 recorded processes the start canary is a continuum from 1.0 to about 1.5 times the minimum, a trough at 1.55 to 1.95, and a slow mode at 2.0 to 4.5; the processes that rule discarded in the 1.3 to 1.6 band measured about 1.05 times the kept median, so it threw good data away (31.5 percent of the final-table run).
+
+New rule (`ts/bench/lib/canary.ts`): R is the lower quartile of all start canaries of the run; a process is discarded when its start canary is above 1.5 R, or its end/start ratio is above 1.3. A side of a row with fewer than 3 kept processes gets the fastest-start half of its processes back and the row is marked WEAK. Re-judging the stored final-table run: 43 of 1,152 processes discarded (3.7 percent) instead of 363; no row moves by more than 5 percent. A/A run (the same bundle on both sides, 8 rows): every row "same", largest deviation 1.03x; that is the noise floor of the tool.
+
+**Limit that the rule cannot remove:** a row whose reference call is itself longer than the fast window cannot be measured fairly. `SpinBlockDOM` on the spec document takes about 1.6 s per call on the reference bundle, so every reference process is in the slow CPU state while the port's 136 ms calls are not; the tool reports "11.85x faster, ref WEAK". The earlier long-process measurement, in which both sides ran in the slow state, gave 4.22x, and that is the figure to quote for this row. Rows of the final table whose reference time is above about 300 ms per call (`BlockDOM2Md` spec 320 ms, `HTML2Md` spec 302 ms, `Md2VditorSVDOM` spec 271 ms) are close to the same limit: their ratios (5.98x, 11.42x, 7.68x) may be somewhat high; the earlier table had 9.06x for `HTML2Md` and 7.58x for `Md2VditorSVDOM`.

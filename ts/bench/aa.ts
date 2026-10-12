@@ -13,15 +13,17 @@
 // is counted within +-5%, +-10% and +-20%. A row with a zero or non-finite time
 // on either side is a DEFECT: it is listed, counted, and left out of the
 // percentages. Nothing is dropped silently.
-// Processes discarded by the canary rule (bench/lib/canary.ts; the runner sets
-// processesUsed) are ignored here: the row statistics are already over the kept
-// processes. A row whose side has no kept process gets no verdict; it is counted
+// Processes discarded by the canary rules (bench/lib/canary.ts, applied again here to
+// the per-process canaries) are ignored: the row statistics are over the kept
+// processes. A side with fewer than 3 kept processes is weak and is counted.
+// A row whose side has no kept process gets no verdict; it is counted
 // and listed apart. Result files written before the canary have no processesUsed
 // and are read as before.
 
 import { readFileSync, existsSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { judgeRun, type Judged } from "./lib/canary.ts";
 
 const RESULTS = fileURLToPath(new URL("./results/", import.meta.url));
 const RUNNER = fileURLToPath(new URL("./runtime-micro.ts", import.meta.url));
@@ -49,6 +51,8 @@ interface Row {
   impl: "A" | "B" | string;
   processes?: number;
   processesUsed?: number;
+  weak?: boolean;
+  perProcess?: Judged[];
   nsPerUnit: Stat;
   bytesPerOp: { median: number } | null;
 }
@@ -58,11 +62,24 @@ function usedOf(r: Row): number {
   return r.processesUsed ?? r.processes ?? 0;
 }
 
+// Re-judges the rows that have per-process canaries with the current rule (bench/lib/canary.ts), so
+// that a file written under an older rule is read under the current one. Rows without perProcess keep
+// their stored processesUsed.
+function rejudge(rows: Row[]): void {
+  const judged = rows.filter((r): r is Row & { perProcess: Judged[] } => r.perProcess !== undefined);
+  const { weak } = judgeRun(judged.map((r) => r.perProcess));
+  judged.forEach((r, i) => {
+    r.processesUsed = r.perProcess.filter((p) => !p.discarded).length;
+    r.weak = weak[i];
+  });
+}
+
 const file = `${RESULTS}runtime-micro.${tag}.json`;
 if (!existsSync(file)) {
   throw new Error(`missing ${file}`);
 }
 const rows = (JSON.parse(readFileSync(file, "utf8")) as { rows: Row[] }).rows;
+rejudge(rows);
 
 const sides = new Map<string, { A?: Row; B?: Row }>();
 for (const r of rows) {
@@ -114,7 +131,8 @@ for (const [id, pair] of sides) {
 }
 
 const n = ratios.length;
-console.log(`processes discarded by the canary rule: ${discardedProcesses} of ${totalProcesses} (left out of every row below)`);
+const weakSides = [...sides.values()].flatMap((p) => [p.A, p.B]).filter((r): r is Row => r !== undefined && r.weak === true).length;
+console.log(`processes discarded by the canary rules: ${discardedProcesses} of ${totalProcesses} (left out of every row below); weak sides (fewer than 3 kept): ${weakSides}`);
 console.log(`A/A rows compared (fastest process per side): ${n}; defects listed below (not in the percentages): ${defects.length}; no verdict: ${noVerdict.length}`);
 for (const p of [0.05, 0.1, 0.2]) {
   const k = ratios.filter((x) => Math.abs(x.r) <= p).length;

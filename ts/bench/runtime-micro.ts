@@ -21,9 +21,10 @@
 // Canary and discard (bench/lib/canary.ts, same rule as bench/macro.ts): each child times a fixed
 // arithmetic loop before and after its measurement. On this machine every process slows down 2.2 to
 // 2.6 times after 2 to 3 s of sustained work, so a process whose canary says it ran in the slow
-// window is discarded: it is kept in the JSON (perProcess, discarded: true, with the reason) and
-// left out of the statistics and the comparison. Never compare the first call against later calls
-// inside one process, and treat absolute times from processes longer than 2 s as inflated.
+// window is discarded: it is kept in the JSON (perProcess, discarded: true, discardRule, reason) and
+// left out of the statistics and the comparison. A row with fewer than 3 kept processes is weak
+// (weak: true). Never compare the first call against later calls inside one process, and treat
+// absolute times from processes longer than 2 s as inflated.
 //
 
 // Each run writes a fresh bench/results/runtime-micro.<tag>.json (nothing is
@@ -51,7 +52,19 @@ import { AppendLegacy, AppendByteLegacy } from "./legacy/append-legacy.ts";
 import { EscapeHTMLLegacy } from "./legacy/escape-legacy.ts";
 import * as escapeEncode from "../src/html/escape_encode.ts";
 import { allocBytesPerOp, bench, gcSeenDuring, machineInfo, type MachineInfo } from "./lib/micro.ts";
-import { CANARY_ITERATIONS, CANARY_MAX_RATIO, canaryMs, canaryWarmUp, judgeCanaries, makeCanary, type Canary, type Judged } from "./lib/canary.ts";
+import {
+  CANARY_ITERATIONS,
+  CANARY_MAX_RATIO,
+  CANARY_MIN_KEPT,
+  CANARY_REFERENCE_QUANTILE,
+  CANARY_START_FACTOR,
+  canaryMs,
+  canaryWarmUp,
+  judgeRun,
+  makeCanary,
+  type Canary,
+  type Judged,
+} from "./lib/canary.ts";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const RESULTS_DIR = fileURLToPath(new URL("./results/", import.meta.url));
@@ -777,7 +790,8 @@ export interface RowResult {
   unit: string;
   unitsPerOp: number;
   processes: number; // processes run
-  processesUsed: number; // processes not discarded by the canary rule; the statistics below are over these
+  processesUsed: number; // processes not discarded by the canary rules; the statistics below are over these
+  weak: boolean; // fewer than CANARY_MIN_KEPT processes kept (bench/lib/canary.ts)
   nsPerUnit: Stat;
   nsPerOp: Stat;
   bytesPerOp: { perProcess: number[]; median: number; min: number; max: number } | null;
@@ -886,6 +900,7 @@ function summarise(g: Group, e: Entry, per: ChildResult[]): RowResult {
     unitsPerOp: e.def.unitsPerOp,
     processes: per.length,
     processesUsed: per.length,
+    weak: false,
     nsPerUnit: stat([]),
     nsPerOp: stat([]),
     bytesPerOp: null,
@@ -901,6 +916,7 @@ function summarise(g: Group, e: Entry, per: ChildResult[]): RowResult {
       opsMeasured: p.opsMeasured,
       canary: p.canary,
       discarded: false,
+      discardRule: null,
       discardReason: null,
     })),
   };
@@ -931,12 +947,14 @@ function restat(row: RowResult): void {
   row.opsMeasured = kept.map((p) => p.opsMeasured);
 }
 
-// Judges every process of the run (the fastest start canary is run-wide), then restates every row.
+// Judges every process of the run (the reference of the start rule is run-wide; every row is one
+// side), then restates every row.
 function finalizeRows(rows: RowResult[]): void {
-  judgeCanaries(rows.flatMap((r) => r.perProcess));
-  for (const r of rows) {
+  const { weak } = judgeRun(rows.map((r) => r.perProcess));
+  rows.forEach((r, i) => {
+    r.weak = weak[i];
     restat(r);
-  }
+  });
 }
 
 function measureGroup(g: Group, rounds: number): RowResult[] {
@@ -986,7 +1004,20 @@ function runner(): void {
     writeFileSync(
       file,
       JSON.stringify(
-        { tag, mode: aa ? "aa" : "interleaved", rounds, machine, canary: { iterations: CANARY_ITERATIONS, maxRatio: CANARY_MAX_RATIO }, rows },
+        {
+          tag,
+          mode: aa ? "aa" : "interleaved",
+          rounds,
+          machine,
+          canary: {
+            iterations: CANARY_ITERATIONS,
+            maxRatio: CANARY_MAX_RATIO,
+            startFactor: CANARY_START_FACTOR,
+            referenceQuantile: CANARY_REFERENCE_QUANTILE,
+            minKept: CANARY_MIN_KEPT,
+          },
+          rows,
+        },
         null,
         2,
       ) + "\n",

@@ -28,9 +28,19 @@
 //   one input, on the engine of bench/lib/methods.ts.
 // - Canary: the child times a fixed arithmetic loop right before its warm-up and right after
 //   its last timed batch (start and end canary, and their ratio, are in the result). The parent
-//   discards a process whose end/start ratio is above 1.3, or whose start canary is more than
-//   1.3 times the fastest start canary of the whole run. Discarded processes are kept in the
-//   JSON (flag "discarded", with the reason) and left out of the verdict.
+//   judges every process of the run once all rows are known (bench/lib/canary.ts, judgeRun):
+//   1. end-start rule: a process whose end/start canary ratio is above 1.3 is discarded;
+//   2. start rule: R = the lower quartile (25th percentile, nearest rank) of the start canaries of
+//      the whole run; a process whose start canary is above 1.5 x R is discarded;
+//   3. minimum kept: a side (one row on one side) left with fewer than 3 processes is WEAK. Then
+//      its fastest-start half is restored (keptByFallback), so no side loses all its processes.
+//   Discarded processes are kept in the JSON (flag "discarded", "discardRule", "discardReason")
+//   and left out of the verdict; a weak side is flagged in the JSON ("weak", per side and per row)
+//   and in the table. A process with no canary (an old file) is never discarded.
+// - Noise floor of the tool (A/A run, the same bundle on both sides, four methods on small and
+//   spec): all 8 rows "same"; the largest deviation from 1.00x is 1.03x (VditorDOM2Md|small, MarkdownStr|spec),
+//   so the tool reports differences below about 3% as noise. Measured with the discard rule of
+//   bench/lib/canary.ts (tag aa-macro, results/macro.aa-macro.json).
 // - Budget: the child's CPU-busy time (load, warm-up, timed batches, and the output checks)
 //   should stay under about 1.5 s (CHILD_BUDGET_MS, measured from process start).
 // - Timing is in batches, so that the microsecond calls of tiny and small inputs are not
@@ -54,9 +64,10 @@
 // - Verdict as in bench/lib/stats.ts, over the processes that were not discarded: the fastest
 //   process per side (its median time per call), 20% threshold relative to the reference; spread
 //   = max / min over the kept processes of one side, flagged UNSTABLE above 1.5. The table has a
-//   "procs" column with the kept/run count per side. A side with no kept process gives no verdict.
-//   The run prints a warning line for every row where more than a third of its processes were
-//   discarded (printed at the end, when the run-wide fastest start canary is known).
+//   "procs" column with the kept/run count per side, and a row whose side is WEAK (fewer than 3
+//   kept processes, see bench/lib/canary.ts) is flagged "weak" there and in the JSON. A side with
+//   no process at all gives no verdict. The run prints a warning line for every row where more
+//   than a third of its processes were discarded.
 // - A method where both sides throw (or both lack it) is skipped and says so. If only one
 //   side throws or lacks it, the run fails.
 
@@ -79,7 +90,19 @@ import {
   type InputName,
 } from "./lib/inputs.ts";
 import { UNSTABLE, median, spreadOf, verdictFor } from "./lib/stats.ts";
-import { CANARY_ITERATIONS, CANARY_MAX_RATIO, canaryMs, canaryWarmUp, judgeCanaries, makeCanary, type Canary, type Judged } from "./lib/canary.ts";
+import {
+  CANARY_ITERATIONS,
+  CANARY_MAX_RATIO,
+  CANARY_MIN_KEPT,
+  CANARY_REFERENCE_QUANTILE,
+  CANARY_START_FACTOR,
+  canaryMs,
+  canaryWarmUp,
+  judgeRun,
+  makeCanary,
+  type Canary,
+  type Judged,
+} from "./lib/canary.ts";
 
 const BUILD_SCRIPT = fileURLToPath(new URL("../scripts/build.mjs", import.meta.url));
 const RESULTS_DIR = fileURLToPath(new URL("./results/", import.meta.url));
@@ -273,6 +296,7 @@ interface Proc extends Judged {
 interface Processes {
   run: number;
   used: number; // processes not discarded
+  weak: boolean; // fewer than CANARY_MIN_KEPT processes left (bench/lib/canary.ts)
   perProcess: Proc[];
   fastestUs: number; // NaN when no process is used
   medianOfMediansUs: number;
@@ -290,6 +314,7 @@ interface MethodResult {
   skipReason?: string;
   port?: Processes;
   ref?: Processes;
+  weak?: boolean; // either side is weak
   ratio?: number;
   verdict?: string;
   hashesAgree?: boolean;
@@ -332,12 +357,13 @@ function procOf(c: ChildOut): Proc {
     lengthsStable: c.lengthsStable,
     canary: c.canary,
     discarded: false,
+    discardRule: null,
     discardReason: null,
   };
 }
 
 function sideOf(list: ChildOut[]): Processes {
-  return { run: list.length, used: list.length, perProcess: list.map(procOf), fastestUs: NaN, medianOfMediansUs: NaN, spread: NaN };
+  return { run: list.length, used: list.length, weak: false, perProcess: list.map(procOf), fastestUs: NaN, medianOfMediansUs: NaN, spread: NaN };
 }
 
 // Summary of the processes that were not discarded.
@@ -396,13 +422,15 @@ function measureMethod(spec: MethodSpec, inputName: InputName, input: string, ro
   };
 }
 
-// Judges every process of the run (the fastest start canary is run-wide), then summarises each
-// side over the processes that were not discarded. Called before every save and before the table.
+// Judges every process of the run (the reference of the start rule is run-wide), then summarises
+// each side over the processes that were not discarded. Called before every save and before the table.
 function finalize(results: MethodResult[]): void {
   const ok = results.filter((r): r is MethodResult & { port: Processes; ref: Processes } => r.status === "ok" && r.port !== undefined && r.ref !== undefined);
-  const all = ok.flatMap((r) => [...r.port.perProcess, ...r.ref.perProcess]);
-  judgeCanaries(all);
-  for (const r of ok) {
+  const { weak } = judgeRun(ok.flatMap((r) => [r.port.perProcess, r.ref.perProcess]));
+  ok.forEach((r, i) => {
+    r.port.weak = weak[2 * i];
+    r.ref.weak = weak[2 * i + 1];
+    r.weak = r.port.weak || r.ref.weak;
     summariseSide(r.port);
     summariseSide(r.ref);
     if (r.port.used === 0 || r.ref.used === 0) {
@@ -413,7 +441,7 @@ function finalize(results: MethodResult[]): void {
       r.ratio = v.ratio;
       r.verdict = v.verdict;
     }
-  }
+  });
 }
 
 // us per call, as ms from 1 ms up. NaN (no kept process) prints as a dash.
@@ -442,7 +470,12 @@ function printTable(results: MethodResult[]): void {
     }
     const p = r.port as Processes;
     const q = r.ref as Processes;
-    const flags = [p.spread > UNSTABLE ? "port UNSTABLE" : "", q.spread > UNSTABLE ? "ref UNSTABLE" : ""]
+    const flags = [
+      p.weak ? "port WEAK (fewer than 3 kept)" : "",
+      q.weak ? "ref WEAK (fewer than 3 kept)" : "",
+      p.spread > UNSTABLE ? "port UNSTABLE" : "",
+      q.spread > UNSTABLE ? "ref UNSTABLE" : "",
+    ]
       .filter((x) => x !== "")
       .join(", ");
     console.log(
@@ -464,7 +497,7 @@ function discardWarnings(results: MethodResult[]): string[] {
     const discarded = total - r.port.used - r.ref.used;
     if (discarded > total * DISCARD_SHARE) {
       out.push(
-        `WARNING ${r.key}: ${discarded} of ${total} processes discarded (port ${r.port.run - r.port.used}, reference ${r.ref.run - r.ref.used}); more than a third, the row is weak`,
+        `WARNING ${r.key}: ${discarded} of ${total} processes discarded (port ${r.port.run - r.port.used}, reference ${r.ref.run - r.ref.used}); more than a third of the run`,
       );
     }
   }
@@ -529,7 +562,14 @@ function parent(): void {
             childBudgetMs: CHILD_BUDGET_MS,
             unit: "us per call",
           },
-          canary: { iterations: CANARY_ITERATIONS, maxRatio: CANARY_MAX_RATIO, discardShare: DISCARD_SHARE },
+          canary: {
+            iterations: CANARY_ITERATIONS,
+            maxRatio: CANARY_MAX_RATIO,
+            startFactor: CANARY_START_FACTOR,
+            referenceQuantile: CANARY_REFERENCE_QUANTILE,
+            minKept: CANARY_MIN_KEPT,
+            discardShare: DISCARD_SHARE,
+          },
           methods: results,
         },
         null,
@@ -561,7 +601,13 @@ function parent(): void {
   const procs = results.flatMap((r) => (r.status === "ok" && r.port !== undefined && r.ref !== undefined ? [...r.port.perProcess, ...r.ref.perProcess] : []));
   const discarded = procs.filter((p) => p.discarded).length;
   console.log(`\n${results.length - skipped.length} compared, ${skipped.length} skipped (threw or missing on both sides).`);
-  console.log(`${discarded} of ${procs.length} processes discarded by the canary rule (excluded from the verdicts; kept in the JSON).`);
+  const byRule = (rule: string): number => procs.filter((p) => p.discardRule === rule).length;
+  const weakRows = results.filter((r) => r.weak === true).length;
+  console.log(
+    `${discarded} of ${procs.length} processes discarded by the canary rules (excluded from the verdicts; kept in the JSON): ` +
+      `end-start ${byRule("end-start")}, start ${byRule("start")}; ` +
+      `${procs.filter((p) => p.keptByFallback).length} kept again by the minimum-kept fallback; ${weakRows} weak row(s).`,
+  );
   save();
   console.log(`wrote ${file}`);
 }

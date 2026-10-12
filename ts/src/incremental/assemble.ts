@@ -18,7 +18,7 @@ import type { Lute } from "../types.ts";
 import { fingerprint } from "./options_fingerprint.ts";
 import { scanTopLevel } from "./scanner.ts";
 import { sandwichCheck } from "./parser_certificate.ts";
-import { analyse, build, classify, listCoupling, render, runChild, withoutNodeIDs } from "./sandbox.ts";
+import { analyse, build, classify, listCoupling, render, runChild } from "./sandbox.ts";
 import type { Built, DomCtx, Handle, ModeAdapter } from "./sandbox.ts";
 import { addVariant, clearMemoSlots, evict, MEMO_REPROBE, newEntry, removeEntry, State } from "./cache.ts";
 import type { MemoSlot } from "./cache.ts";
@@ -198,7 +198,7 @@ export function tryDom2Md(st: State, lute: Lute, adapter: ModeAdapter, htmlIn: s
   for (const e of order) {
     stats.analyses++;
     stats.sandboxRuns++;
-    const r = phase(() => withoutNodeIDs(() => analyse(lute, e.html, true, e.opaque)));
+    const r = phase(() => analyse(lute, e.html, true, e.opaque));
     if (!r.ok) {
       const o = refusalOutcome(st, map, e, r.refusal, e.html);
       evict(st, call);
@@ -274,7 +274,7 @@ export function tryDom2Md(st: State, lute: Lute, adapter: ModeAdapter, htmlIn: s
     handles.delete(e);
     const dom: DomCtx = { domPrev: domP[i], domNext: domN[i], domNextAttrs: domNA[i] };
     stats.builds++;
-    const r = phase(() => withoutNodeIDs(() => build(lute, adapter, hd, dom)));
+    const r = phase(() => build(lute, adapter, hd, dom));
     if (!r.ok) {
       const o = refusalOutcome(st, map, e, r.refusal, e.html);
       evict(st, call);
@@ -341,7 +341,7 @@ export function tryDom2Md(st: State, lute: Lute, adapter: ModeAdapter, htmlIn: s
         // the render of the build of this call (the handle is used once)
         built.delete(e);
         stats.renders++;
-        const rr = phase(() => withoutNodeIDs(() => render(lute, adapter, b.built, ctx, renderOptions)));
+        const rr = phase(() => render(lute, adapter, b.built, ctx, renderOptions));
         got = rr.ok ? { kind: "ran", info: b.built.info, variant: rr.value } : { kind: "refused", refusal: rr.refusal };
       } else {
         // a child built at another position of this call, or a stored child: run in full with the exact context (section 5.1, line 14)

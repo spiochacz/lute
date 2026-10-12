@@ -21,7 +21,12 @@ const H1: Record<Mode, string> = {
   // the IR heading as the forward conversion writes it (Md2VditorIRDOM of "# h")
   ir: '<h1 data-block="0" class="vditor-ir__node" id="ir-h" data-marker="#"><span class="vditor-ir__marker vditor-ir__marker--heading" data-type="heading-marker"># </span>h</h1>',
 };
-const LINK_REF_DEFS = '<div data-block="0" data-type="link-ref-defs-block">[r]: http://x</div>';
+// A code-block div whose only content is an ideographic space (U+3000): the engine emits it as a top-level text node, which is a non-block
+// node, so it is the previous sibling of the heading after it (see the prev witnesses below).
+const TEXT_BLOCK: Record<Mode, string> = {
+  wysiwyg: '<div data-block="0" data-type="code-block">　</div>',
+  ir: '<div data-block="0" data-type="code-block" class="vditor-ir__node">　</div>',
+};
 // A fenced code block as the forward conversion writes it (Md2VditorDOM / Md2VditorIRDOM of "```\nx\n```\n"): a root-level block whose
 // blank line after it depends on whether it is last (isLast). An indented code block in a paragraph no longer shows this: since
 // tasks/002 item 67 the paragraph is replaced by its code block, and the old fixture's blank lines were the bug.
@@ -45,11 +50,13 @@ const WITNESSES: Witness[] = [
   // isLast: the code block is last alone (one newline) and has a blank line after it when a heading follows
   { field: "isLast", mode: "wysiwyg", d1: FENCED.wysiwyg, d2: FENCED.wysiwyg + H1.wysiwyg, out1: "```\nx\n```\n", out2: "```\nx\n```\n\n# h\n" },
   { field: "isLast", mode: "ir", d1: FENCED.ir, d2: FENCED.ir + H1.ir, out1: "```\nx\n```\n", out2: "```\nx\n```\n\n# h\n" },
-  // prev: the old fixture (the link-ref-defs text had no trailing LF, so the heading needed newlineBeforeBlock, which reads prev). Since
-  // tasks/002 item 68 the text ends with a LF, the output no longer depends on prev, and no composable fixture was found (top-level text and
-  // inline tags fall back to the normal path): NC2 is not caught by this witness any more. Open, see the report of 2026-10-12.
-  { field: "prev", mode: "wysiwyg", d1: H1.wysiwyg, d2: LINK_REF_DEFS + H1.wysiwyg, out1: "# h\n", out2: "[r]: http://x\n# h\n" },
-  { field: "prev", mode: "ir", d1: H1.ir, d2: LINK_REF_DEFS + H1.ir, out1: "# h\n", out2: "[r]: http://x\n# h\n" },
+  // prev: renderHeading calls newlineBeforeBlock, which writes a newline when node.Previous is not a block node and the output does not end
+  // with a LF. The heading's Previous is the AST stub of the previous sibling's last top-level node: here the text node of U+3000 (NodeText is
+  // not a block), so the heading gets its newline only when prev is passed (NC2 forces prev to -1 and loses it). A link reference definition
+  // does not show this any more: its text ends with a LF since tasks/002 item 68.
+  { field: "prev", mode: "wysiwyg", d1: H1.wysiwyg, d2: TEXT_BLOCK.wysiwyg + H1.wysiwyg, out1: "# h\n", out2: "\u3000\n# h\n" },
+  // The IR counterpart of this pair gives the same output under NC2 (the IR output has its own blank line before the heading), so there is no
+  // IR witness of prev yet; the WYSIWYG witness is the one that NC2 changes.
   // domNext: the br rule of the paragraph reads the next sibling; a list after it changes the output
   { field: "domNext", mode: "wysiwyg", d1: BR_PARAGRAPH, d2: BR_PARAGRAPH + UL, out1: "a\nb\n", out2: "ab\n\n* a\n" },
   { field: "domNext", mode: "ir", d1: BR_PARAGRAPH, d2: BR_PARAGRAPH + UL, out1: "a\nb\n", out2: "ab\n\n* a\n" },

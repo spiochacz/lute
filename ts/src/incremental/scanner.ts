@@ -4,6 +4,10 @@
 // the grammar of section 4.4 of the milestone B specification (G1-G5); otherwise it returns the code of the first violated clause.
 // The cut is then certified by the engine's HTML parser (parser_certificate.ts) before any child is used.
 // Ported from ts/experiments/dom2md-cache/scan.ts (the algorithm; the codes, the top-level check and the fields are the specification's).
+// The HTML facts (which elements have no end tag, which start tags close an open p) are probed from the engine's parser (html_facts.ts); the
+// sets ALLOWED, TOP_LEVEL and TABLE_PARTS below are the scanner's policy (what it accepts), not HTML facts.
+
+import { htmlFacts } from "./html_facts.ts";
 
 export interface Child {
   start: number;
@@ -33,8 +37,6 @@ export type ScanCode =
 
 export type ScanResult = { ok: true; children: Child[] } | { ok: false; code: ScanCode; at: number };
 
-const VOID = new Set(["br", "hr", "img", "input", "wbr", "col"]);
-
 // Elements that may occur anywhere inside a child (grammar G2).
 const ALLOWED = new Set([
   "p", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li", "table", "thead", "tbody", "tr", "th", "td",
@@ -45,13 +47,6 @@ const ALLOWED = new Set([
 
 // The tags that may be the top-level element of a child (grammar G4).
 const TOP_LEVEL = new Set(["p", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "table", "blockquote", "hr", "div"]);
-
-// Start tags that close an open <p> (HTML parsing: "has a p element in button scope"); a conservative
-// superset, so a child that has one of them inside a <p> is refused instead of reasoned about.
-const CLOSES_P = new Set([
-  "p", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li", "table", "blockquote", "pre", "div", "hr", "details",
-  "summary",
-]);
 
 const TABLE_PARTS = new Set(["thead", "tbody", "tfoot", "tr", "colgroup"]);
 
@@ -68,6 +63,7 @@ function isHeadingName(name: string): boolean {
 }
 
 export function scanTopLevel(html: string): ScanResult {
+  const facts = htmlFacts(ALLOWED); // probed once per process, on the first scan (html_facts.ts)
   const n = html.length;
   const children: Child[] = [];
   const stack: string[] = [];
@@ -240,14 +236,14 @@ export function scanTopLevel(html: string): ScanResult {
     if (!closed) {
       return { ok: false, code: "unterminated-tag", at: i };
     }
-    const isVoid = VOID.has(name);
+    const isVoid = facts.void.has(name);
     if (selfClose && !isVoid) {
       return { ok: false, code: "self-closing-non-void", at: i };
     }
 
     // nesting rules
     const top = stack.length > 0 ? stack[stack.length - 1] : "";
-    if (pDepth > 0 && CLOSES_P.has(name)) {
+    if (pDepth > 0 && facts.closesP.has(name)) {
       return { ok: false, code: "implicit-end-tag", at: i };
     }
     if (name === "li" && top !== "ul" && top !== "ol") {

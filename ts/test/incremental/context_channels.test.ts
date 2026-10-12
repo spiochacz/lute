@@ -137,8 +137,9 @@ for (const p of PINNED) {
   });
 }
 
-// NC14 (unit): the generated-id refusal (withoutNodeIDs, ast.NewNodeIDCalls) refuses a child whose render creates a node ID. The prototype of
-// the renderer writes a new ID; the same child must compose when the renderer is not patched (the control that makes the refusal meaningful).
+// NC14 (unit): the generated-id refusal (generatedIDLeaks in render) refuses a child whose render creates a node ID that the log shows. The
+// prototype of the renderer writes a new ID; the same child must compose when the renderer is not patched (the control that makes the refusal
+// meaningful).
 test("NC14: a child whose output contains a generated node ID is refused as generated-id", () => {
   const html = '<p data-block="0">x</p>';
   const proto = FormatRenderer.prototype as unknown as { renderParagraph: (n: ast.Node, e: boolean) => ast.WalkStatus };

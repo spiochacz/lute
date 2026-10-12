@@ -10,7 +10,7 @@ Only the two public wrappers use the cache. Nothing else in the engine changes i
 
 ## Model
 
-- **Top-level children.** `scanner.ts` cuts the string into children without building a DOM. It accepts only the grammar it documents (G1 to G5); anything else is a fallback with a scan code. The cut is then certified by the engine's own HTML parser (`parser_certificate.ts`): a child is certified when parsing it alone reaches the same parser state at its end as the reference `<hr>`.
+- **Top-level children.** `scanner.ts` cuts the string into children without building a DOM. It accepts only the grammar it documents (G1 to G5); anything else is a fallback with a scan code. The scanner's HTML facts (which elements have no end tag, which start tags close an open `<p>`) are not written by hand: `html_facts.ts` probes them from the engine's parser, once per process, on the first scan. The scanner's `ALLOWED`, `TOP_LEVEL` and `TABLE_PARTS` sets are its policy and stay literals; table elements keep the scanner's explicit table rules (the parser drops them in body context). The cut is then certified by the engine's own HTML parser (`parser_certificate.ts`): a child is certified when parsing it alone reaches the same parser state at its end as the reference `<hr>`.
 - **Per-child log.** A child's entry holds its string, its `ChildInfo` (alive, atom, attrs, topTypes), its refusal (if any) and its variants. A variant is the root-writer log of one run (`RootOp` list, coalesced), the `LastOut` at its end, and its key.
 - **Context key.** The key of a variant is `lastOut,prev,next,domPrev,domNext,domNextAttrs` (`contextKey` in `piece.ts`). `lastOut` is the renderer's LastOut at entry; `prev` and `next` are the AST node types of the neighbouring emitted nodes; `domPrev`, `domNext` are the DOM atoms of the nearest alive siblings, and `domNextAttrs` their attribute count. A variant is used only for an equal key. At most 16 variants per child (`MAX_VARIANTS`); the oldest is dropped.
 - **Parser certificate.** Only certified children are analysed. In strict mode the sandwich check (`sandwichCheck`) is also run on each newly certified child.
@@ -19,10 +19,10 @@ Only the two public wrappers use the cache. Nothing else in the engine changes i
   1. *analyse*: parse with the certificate (or without it, for a child already certified), then the first three DOM passes of `adjustVditorDOM` (the passes whose `phase` is `"analyse"` in `ADJUST_VDITOR_DOM_PASSES`). A child removed by `removeEmptyNodes` is dead.
   2. *build*: the DOM neighbours are linked to the stubs; the remaining DOM passes run on the child; `genAST`; a check that the tip is back at the root (an open tip is `tip-open`); `adjustTree`. The child's `ChildInfo` is complete after this phase.
   3. *render*: the AST neighbours are linked to stubs; the recording renderer (`render/recording_format_renderer.ts`) renders the child with `LastOut` of the key; the log is coalesced.
-  `runChild` is the three phases for one context. Each phase runs under `withoutNodeIDs`: if `ast.NewNodeIDCalls` moved, the child is refused as `generated-id`.
+  `runChild` is the three phases for one context. Each phase collects the node IDs it generates (`collectingIDs`, which installs `ast.InstallNodeIDCollector` and restores the previous collector in a `finally`): the IDs are kept on the child's handle (`Handle.ids`, then `Built.ids`), so that a render from a build of the same call sees the IDs of all three phases. After the render, `generatedIDLeaks` checks the concatenation of the bytes of the log's `Append` operations: if the full ID or its first 14 characters (the time stamp the engine writes into `updated`) occurs there, the child is refused as `generated-id`. An ID that the output does not show composes.
 - **Call order** (`assemble.ts`): options fingerprint; preprocess; scan; lookup of the children (new children are entered); stored refusals (the first in document order ends the call); analyse of the new children (opaque children first); list coupling; DOM sweeps (the nearest alive siblings of each child); build of the new alive children in document order; AST sweeps (the neighbouring emitted node types); replay child by child; document close; output; eviction; `verify` when enabled.
 - **Replay.** For each alive child, the variant with the key of its position is used. If there is none, the child is rendered from its build of this call when that build had the same DOM context; otherwise it runs in full with the exact context (`runChild`). A new variant is stored after a run.
-- **Negative memo.** One memo per mode holds the entry whose stored refusal ended the last call, when the refusal is `cert:opaque-preview`, `tip-open`, `generated-id` or `engine-threw` (the refusals that depend only on the child and the options). A call whose string still contains that child is answered with the stored reason and no other work (`memoHits`). Every 32nd hit runs the full path instead, which refreshes or clears the memo.
+- **Negative memo.** One memo per mode holds the entry whose stored refusal ended the last call, when the refusal is `cert:opaque-preview`, `tip-open`, `generated-id` or `engine-threw`. The first two and `engine-threw` depend only on the child and the options. `generated-id` depends on the child and on the context only through the output of the render, so a memo hit for it can turn a composition into a fallback (never the reverse): it is still sound, and the re-probe bounds the cost. A call whose string still contains that child is answered with the stored reason and no other work (`memoHits`). Every 32nd hit runs the full path instead, which refreshes or clears the memo.
 - **Eviction.** The state holds two maps (WYSIWYG, IR) and a byte estimate. The bound is `maxBytes` (default 64 MiB). When it is exceeded at the end of a call, entries not touched by that call are removed in insertion order until 75 percent of the bound; if the total is still over the bound, both maps are cleared.
 - **Options.** `fingerprint` reads every own field of `ParseOptions` and `RenderOptions` on every call. A change clears both maps (`optionClears`). An unknown field type is `options-not-fingerprintable`.
 
@@ -34,7 +34,17 @@ Only the two public wrappers use the cache. Nothing else in the engine changes i
 4. An inconsistency is never cached: its entry is removed, and the call falls back. An unsupported refusal is cached on its entry (the child is not run again).
 5. The render options of a call are frozen (`Object.freeze`): a renderer that writes to them throws instead of leaking state between children.
 6. A fallback is always one of the categories below, and its name is a property of the refusal, never a condition on the Markdown construct.
-7. A node ID created by a phase refuses the child; the cache never reproduces a random ID.
+7. A node ID generated for a child refuses it when its log shows the ID (or its time stamp); the cache never reproduces a random ID. An ID that the log does not show is not reproduced either: the replayed log has no ID, and the output does not depend on its value (section "Node IDs" below).
+
+## Node IDs
+
+`ast.NewNodeID` returns a random ID (time stamp and 7 random characters) and, while a collector is installed, appends it to the collector. The sandbox installs one per child and phase. A child is refused (`generated-id`) only when one of its IDs is observable in the log. The argument for that rule is the consumers: an ID can change the output in two ways, by its characters (then they appear in the output, or a prefix of them does) or by its order or identity (a sort key, a map key, a comparison that decides a branch). The DOM2Md paths have these consumers only:
+
+- `vditor_wysiwyg.ts`, `adjustVditorDOMListItemInP` (a DOM pass of the build phase, the only generator reached by the cache): the `data-node-id` of a list item is replaced by a new ID when it equals the one of the previous sibling (on the empty attribute too), and the first child's when it equals the last child of the previous item. Both are equality tests against a fresh random value, which equals no other value, so the branch does not depend on the value.
+- `renderer.ts`, `BaseRenderer.NodeID`: returns the ID of the node's `id` IAL or a new one. Its callers are `echarts_json_renderer.ts` and the protyle renderers, none of which the Vditor paths use.
+- `ast/node.ts`, `Node.IsChildBlockOf` (tests the ID for emptiness; called from `parse/blocks.ts`, the Markdown parser) and `BlockIDs` (no callers in `src`).
+
+The generators that the Vditor paths do not reach: `parse/html_block.ts`, `parse/list.ts`, `parse/parse.ts`, `parse/tabs.ts` (the Markdown parser), `protyle.ts`, `protyle_tabs.ts`, `render/protyle_renderer.ts`, `render/protyle_export_renderer.ts` (the protyle engine), `global.ts` (the export of `NewNodeID`). No consumer orders, keys or compares an ID by value on the DOM2Md paths, so the observable characters are the only way an ID reaches the output, and the check covers them.
 
 ## Fallback categories (`unsupported`, counted in `stats.unsupported`)
 
@@ -58,7 +68,7 @@ Only the two public wrappers use the cache. Nothing else in the engine changes i
 - `cert:opaque-preview`: a child with a data-render preview fails its certificate.
 - `tip-open`: `genAST` leaves the tip of the tree open (an unclosed block).
 - `list-coupling`: the list pass of the engine would merge two alive children, so they are not independent.
-- `generated-id`: a phase created a node ID.
+- `generated-id`: a node ID generated for the child is observable in its log (its full ID or its first 14 characters).
 - `engine-threw`: a phase threw any other exception.
 - `too-large`: the stored bytes exceed `maxBytes` at the lookup.
 
@@ -98,14 +108,14 @@ Each hook is marked `PORT-NOTE: hook for the per-child cache (tasks/004)`. None 
 - `src/vditor_wysiwyg.ts`: `VditorDOM2Md` (the wrapper: one test of `incrementalActive.count` and `incrementalAuto.minLength`, then `tryIncrementalDom2Md`); the stage functions `vditorDOM2MdPreprocess`, `vditorDOM2MdPrepare`, `vditorDOM2MdBuildTree`, `vditorDOM2MdAdjustTree`, `vditorDOM2MdRenderOptions`, `vditorDOM2MdRender` (the normal path runs them in this order; the sandbox calls the preprocess, adjust-tree and render-options stages); the table `ADJUST_VDITOR_DOM_PASSES` with `runAdjustVditorDOMPass`, which `adjustVditorDOM` runs, and whose `phase` field the sandbox reads.
 - `src/vditor_ir.ts`: the same for `VditorIRDOM2Md`. `adjustVditorDOM` is shared with the WYSIWYG path (no separate IR table). Both wrappers import `dispatch.ts`; nothing else in the engine does.
 - `src/render/format_renderer.ts`: `newBuffer` and `trimWriterTo`, the two ways the writer of a container is created and the root writer is trimmed. The default of each is the statement it replaces; the recording renderer of the sandbox uses them.
-- `src/ast/node.ts`: `NewNodeIDCalls`, the counter of `NewNodeID` calls.
+- `src/ast/node.ts`: `InstallNodeIDCollector` and `RemoveNodeIDCollector`, the collector of `NewNodeID` (a list the sandbox installs around each phase; one null test per call on the default path).
 - `src/bundle.ts` and `src/index.ts`: load `src/incremental/index.ts`, which registers the handler and defines the public API. `src/incremental/index.ts` also defines `Lute.prototype.SetIncrementalDom2Md` and `Lute.prototype.IncrementalDom2MdStats`.
 
 `dispatch.ts` holds the counter, the length threshold, the handler slot and the registry of states (a `WeakMap` per engine). The engine's files import nothing else of this directory.
 
 ## Testing
 
-Unit tests (`test/incremental/*.test.ts`): the context key and its fields (`context_key`), the witnesses of each context field and the NC14 refusal (`context_channels`, `witnesses`), the barrier (`barrier`), the parser certificate, the scanner, the pass order (`adjust_passes`), the cache state and eviction (`cache`), the negative memo, the edits and the generated IDs (`generated_ids`), the policy (`policy`). `reference_engine.ts` is the normal path for the differential tests (an engine with policy `"off"`).
+Unit tests (`test/incremental/*.test.ts`): the context key and its fields (`context_key`), the witnesses of each context field and the NC14 refusal (`context_channels`, `witnesses`), the barrier (`barrier`), the parser certificate, the scanner and the probed HTML facts (`html_facts`), the pass order (`adjust_passes`), the cache state and eviction (`cache`), the negative memo, the edits and the generated IDs (`generated_ids`: the collector, the refusal only for an observable ID, the composing example), the policy (`policy`). `reference_engine.ts` is the normal path for the differential tests (an engine with policy `"off"`).
 
 End-to-end tests (`test/e2e/root/`): `dom2md_incremental*.test.ts` compare the cache (strict and verify) with the normal path on the corpus, in both modes and under several option sets; `dom2md_replay.test.ts` replays the logs. `test/e2e/bundle.test.ts` checks the bundle and the two engine methods that the port adds.
 
@@ -125,6 +135,6 @@ node experiments/dom2md-cache/negative-control.ts --jobs=3 --cmp=500     # with 
 - The byte estimate is approximate; `maxBytes` bounds the stored entries and variants, not the process memory.
 - An unclosed block leaves the tip open: the child is refused (`tip-open`), so the document falls back to the normal path.
 - A single top-level child that is huge is one unit: an edit inside it re-runs its three phases for the whole child.
-- A child whose phase creates a node ID is always refused, even when the ID does not reach the output.
+- A child whose node ID is observable in its log is refused, so a child whose conversion generates IDs that the output does not show composes; a child that shows one falls back.
 - The fingerprint of a `Map` option is a 32-bit hash with the entry count and the character count; a change that gives the same hash, count and characters is not seen.
 - An option change between calls clears the stored entries (`optionClears`); the next call starts cold.

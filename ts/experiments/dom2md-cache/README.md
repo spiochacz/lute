@@ -75,7 +75,7 @@ The controls of `negative-control.ts` (expectations of section 6 step 5 of the a
 | NC11 variants[0] always | assemble: lookup by key | caught | caught | regressions, edit simulation |
 | NC12 coalesce hoists barrier ops | sandbox: coalesce | caught | caught | 1608 mismatches and 818 inconsistencies |
 | NC13 closeDocumentWriter trims LF only | assemble: close | caught | caught | 6 mismatches (edit simulation, default) |
-| NC14 generated-id refusal removed | sandbox withoutNodeIDs: ast.NewNodeIDCalls is not compared | caught (unit) | caught | context_channels NC14 unit test (a renderer that writes a node ID is refused) |
+| NC14 generated-id refusal removed | sandbox render: generatedIDLeaks does not refuse the child (was: the ast.NewNodeIDCalls counter in withoutNodeIDs) | caught (unit) | caught | context_channels NC14 unit test (a renderer that writes a node ID into the output is refused) |
 | NC15 render starts at LF | sandbox render: r.LastOut = 10 (redefined: the accessor is gone) | caught (unit) | caught | context_channels pinned lastOut witness only |
 
 Milestone C (C1) changed the anchors: isFirst and isLast are no fields any more, so NC1 moved to the root LastChild link, NC3 to the Next link, NC5 to the key, NC15 to the render start. Baseline (no change) green: 89 tests, 0 mismatches in four fuzz passes.

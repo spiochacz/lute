@@ -1400,25 +1400,32 @@ export function SetTesting(v: boolean): void {
   testing = v;
 }
 
-// newNodeIDCalls counts the calls of NewNodeID (the counter of NewNodeIDCalls).
-let newNodeIDCalls = 0;
+// nodeIDCollector is the list that NewNodeID appends its IDs to, or null when nobody collects (the default: one null test per call).
+let nodeIDCollector: string[] | null = null;
 
-// NewNodeIDCalls returns the number of calls of NewNodeID so far. The per-child cache reads it before and after a phase: a phase that moved it
-// created a node ID, and the child is refused (src/incremental/sandbox.ts, withoutNodeIDs).
-// PORT-NOTE: new in the port, no Go counterpart; it is only read by the incremental cache.
-export function NewNodeIDCalls(): number {
-  return newNodeIDCalls;
+// InstallNodeIDCollector makes list the collector of NewNodeID (null: no collector) and returns the previous collector. The caller restores
+// it with RemoveNodeIDCollector in a finally, so that collectors nest.
+// PORT-NOTE: new in the port, no Go counterpart; it is used only by the per-child cache (src/incremental/sandbox.ts), which collects the IDs
+// that a phase of a child generates.
+export function InstallNodeIDCollector(list: string[] | null): string[] | null {
+  const previous = nodeIDCollector;
+  nodeIDCollector = list;
+  return previous;
+}
+
+// RemoveNodeIDCollector restores the collector that InstallNodeIDCollector returned.
+export function RemoveNodeIDCollector(previous: string[] | null): void {
+  nodeIDCollector = previous;
 }
 
 // NewNodeID returns a new node ID: local time as yyyymmddhhmmss, then "-" and 7 random characters a-z0-9.
-// With testing on it returns the fixed test ID.
+// With testing on it returns the fixed test ID. The ID is appended to the collector when one is installed.
 export function NewNodeID(): string {
-  newNodeIDCalls++;
-  if (testing) {
-    return "20060102150405-1a2b3c4"; // test environment ID
+  const id = testing ? "20060102150405-1a2b3c4" : formatNodeIDTime(new Date()) + "-" + randStr(7); // the test ID is the fixed test environment ID
+  if (nodeIDCollector !== null) {
+    nodeIDCollector.push(id);
   }
-  const now = new Date();
-  return formatNodeIDTime(now) + "-" + randStr(7);
+  return id;
 }
 
 function pad2(n: number): string {

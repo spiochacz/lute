@@ -230,6 +230,7 @@ export interface Handle {
   child: html.Node; // root.FirstChild, the child itself
   atomMerge: number; // DataAtom before the merge pass
   attrsMerge: number; // Attr.length before the merge pass
+  ids: string[]; // the node IDs that the phases of this child generated so far (section 3.6); read by render
 }
 
 export type Analysis = { kind: "refused"; refusal: Refusal } | { kind: "dead"; atom: number } | { kind: "alive"; handle: Handle };
@@ -239,6 +240,7 @@ export interface Built {
   tree: parse.Tree;
   tops: ast.Node[]; // the top-level AST nodes of the child
   tipOpen: boolean; // tree.Context.Tip is not the root after genAST
+  ids: string[]; // the node IDs generated for this child by analyse, build and render (the list of its handle)
 }
 
 
@@ -248,7 +250,7 @@ function callPass(lute: Lute, name: string, node: html.Node): void {
   f.call(lute, node);
 }
 
-// GeneratedNodeIDError is thrown by withoutNodeIDs when a phase created a node ID. classify maps it to the refusal generated-id.
+// GeneratedNodeIDError is thrown by render when a node ID generated for the child is observable in its log. classify maps it to the refusal generated-id.
 export class GeneratedNodeIDError extends Error {
   constructor() {
     super("a phase of the child created a node ID");
@@ -256,16 +258,69 @@ export class GeneratedNodeIDError extends Error {
   }
 }
 
-// withoutNodeIDs runs one phase of a child (analyse, build or render) and throws GeneratedNodeIDError when the phase created a node ID, by
-// comparing ast.NewNodeIDCalls before and after. Such a child is refused: the ID of a fresh run is random, so the cache cannot reproduce it
-// (section 3.6). The check does not look at the output, so an ID that a pass sets and the output never shows also refuses the child.
-export function withoutNodeIDs<T>(f: () => T): T {
-  const before = ast.NewNodeIDCalls();
-  const v = f();
-  if (ast.NewNodeIDCalls() !== before) {
-    throw new GeneratedNodeIDError();
+// collectingIDs runs one phase of a child (analyse, build or render) with ids as the collector of the node IDs (ast.InstallNodeIDCollector):
+// every ID that the phase generates is appended to ids, and the previous collector is restored when the phase ends, also when it throws.
+export function collectingIDs<T>(ids: string[], f: () => T): T {
+  const previous = ast.InstallNodeIDCollector(ids);
+  try {
+    return f();
+  } finally {
+    ast.RemoveNodeIDCollector(previous);
   }
-  return v;
+}
+
+// generatedIDLeaks reports whether one of the generated IDs is observable in the log: its full ID or its first 14 characters (the time
+// stamp; the engine writes id.slice(0, 14) into attributes such as updated) occurs in the concatenation of the bytes of the Append operations.
+// A node ID is a time stamp plus a random suffix, so a match means that the output depends on the ID, or (improbably) that the document already
+// contained the same characters, which costs only a fallback. An ID that the output never shows is not a dependence on its value: the engine
+// compares IDs only for equality (vditor_wysiwyg.ts, adjustVditorDOMListItemInP, where a fresh ID equals no other ID), and no ID is used as a
+// sort key or a map key on the DOM2Md paths (the consumers are listed in src/incremental/README.md). The concatenation also finds a match
+// that spans two operations.
+export function generatedIDLeaks(ids: string[], ops: RootOp[]): boolean {
+  if (ids.length === 0) {
+    return false;
+  }
+  let total = 0;
+  for (const op of ops) {
+    if (op.kind === "Append") {
+      total += op.bytes.length;
+    }
+  }
+  const log = new Uint8Array(total);
+  let at = 0;
+  for (const op of ops) {
+    if (op.kind === "Append") {
+      log.set(op.bytes, at);
+      at += op.bytes.length;
+    }
+  }
+  const encoder = new TextEncoder();
+  for (const id of ids) {
+    if (containsBytes(log, encoder.encode(id)) || containsBytes(log, encoder.encode(id.slice(0, 14)))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function containsBytes(haystack: Uint8Array, needle: Uint8Array): boolean {
+  if (needle.length === 0) {
+    return true;
+  }
+  const last = haystack.length - needle.length;
+  for (let i = 0; i <= last; i++) {
+    if (haystack[i] !== needle[0]) {
+      continue;
+    }
+    let k = 1;
+    while (k < needle.length && haystack[i + k] === needle[k]) {
+      k++;
+    }
+    if (k === needle.length) {
+      return true;
+    }
+  }
+  return false;
 }
 
 // coalesce merges adjacent Append operations with the same setsLastOut and drops empty ones (section 2.3).
@@ -306,8 +361,14 @@ export function classify(e: unknown): Refusal {
 }
 
 // analyse is the first phase: the DOM of the child (parsed with the certificate when doCertify), passes 1 to 3. It returns the handle,
-// or a refusal (certificate), or "dead" (removeEmptyNodes removed the child). It does not link any neighbour.
+// or a refusal (certificate), or "dead" (removeEmptyNodes removed the child). It does not link any neighbour. The node IDs that the phase
+// generates are collected into the handle (ids).
 export function analyse(lute: Lute, htmlStr: string, doCertify: boolean, opaque: boolean): Analysis {
+  const ids: string[] = [];
+  return collectingIDs(ids, () => analyseIn(lute, htmlStr, doCertify, opaque, ids));
+}
+
+function analyseIn(lute: Lute, htmlStr: string, doCertify: boolean, opaque: boolean, ids: string[]): Analysis {
   let body: html.Node | null;
   if (doCertify) {
     const p = parseWithBoundary(htmlStr);
@@ -341,12 +402,16 @@ export function analyse(lute: Lute, htmlStr: string, doCertify: boolean, opaque:
       return { kind: "dead", atom: atomBefore };
     }
   }
-  return { kind: "alive", handle: { root, child, atomMerge: child.DataAtom, attrsMerge: child.Attr.length } };
+  return { kind: "alive", handle: { root, child, atomMerge: child.DataAtom, attrsMerge: child.Attr.length, ids } };
 }
 
 // build is the second phase: the DOM neighbours are linked (plain assignments, milestone C C1), passes 4 to 15 run with the links in
-// place, then genAST of the child, the tip check and adjustTree. The caller runs it under withoutNodeIDs.
+// place, then genAST of the child, the tip check and adjustTree. The node IDs it generates go to the handle (h.ids).
 export function build(lute: Lute, adapter: ModeAdapter, h: Handle, dom: DomCtx): Built {
+  return collectingIDs(h.ids, () => buildIn(lute, adapter, h, dom));
+}
+
+function buildIn(lute: Lute, adapter: ModeAdapter, h: Handle, dom: DomCtx): Built {
   const { root, child } = h;
   if (root.FirstChild !== child || child.PrevSibling !== null || child.NextSibling !== null) {
     throw new IncrementalInconsistency("sibling-structure-changed", "a DOM pass before the links inserted or removed a top-level node");
@@ -387,12 +452,21 @@ export function build(lute: Lute, adapter: ModeAdapter, h: Handle, dom: DomCtx):
     tops.push(c);
   }
   const info: ChildInfo = { alive: true, atom: h.atomMerge, attrs: h.attrsMerge, topTypes: tops.map((n) => n.Type) };
-  return { info, tree, tops, tipOpen };
+  return { info, tree, tops, tipOpen, ids: h.ids };
 }
 
 // render is the third phase: the AST neighbours are linked from prev and next (isFirst and isLast are prev < 0 and next < 0, invariant I1),
-// the recording renderer runs with LastOut = ctx.lastOut, and the root-writer log is coalesced. The caller runs it under withoutNodeIDs.
+// the recording renderer runs with LastOut = ctx.lastOut, and the root-writer log is coalesced. The node IDs of the child (analyse, build and
+// this render) are checked against the log: one that is observable in it refuses the child as generated-id (section 3.6).
 export function render(lute: Lute, adapter: ModeAdapter, b: Built, ctx: Context, options: RenderOptions = adapter.renderOptions()): Variant {
+  const variant = collectingIDs(b.ids, () => renderIn(lute, adapter, b, ctx, options));
+  if (generatedIDLeaks(b.ids, variant.ops)) {
+    throw new GeneratedNodeIDError();
+  }
+  return variant;
+}
+
+function renderIn(lute: Lute, adapter: ModeAdapter, b: Built, ctx: Context, options: RenderOptions): Variant {
   const { tree, tops } = b;
   if (tops.length > 0) {
     const first = tops[0];
@@ -426,22 +500,22 @@ export function render(lute: Lute, adapter: ModeAdapter, b: Built, ctx: Context,
 }
 
 // runChild runs one child alone (section 3): analyse, build and render for one context. It never throws: a barrier violation or an
-// internal inconsistency is returned as an inconsistency refusal, a node ID created by a phase as generated-id, any other exception as
-// engine-threw. Each phase runs under withoutNodeIDs (section 3.6).
+// internal inconsistency is returned as an inconsistency refusal, a node ID that the output shows as generated-id, any other exception as
+// engine-threw. Each phase collects the node IDs it generates (section 3.6).
 export function runChild(lute: Lute, adapter: ModeAdapter, htmlStr: string, ctx: Context, opts: RunOptions): RunResult {
   try {
-    const a = withoutNodeIDs(() => analyse(lute, htmlStr, opts.certify, opts.opaque));
+    const a = analyse(lute, htmlStr, opts.certify, opts.opaque);
     if (a.kind === "refused") {
       return { info: null, variant: null, refusal: a.refusal };
     }
     if (a.kind === "dead") {
       return { info: { alive: false, atom: a.atom, attrs: 0, topTypes: [] }, variant: null, refusal: null };
     }
-    const b = withoutNodeIDs(() => build(lute, adapter, a.handle, ctx));
+    const b = build(lute, adapter, a.handle, ctx);
     if (b.tipOpen) {
       return { info: b.info, variant: null, refusal: { kind: "unsupported", reason: "tip-open" } };
     }
-    const variant = withoutNodeIDs(() => render(lute, adapter, b, ctx));
+    const variant = render(lute, adapter, b, ctx);
     return { info: b.info, variant, refusal: null };
   } catch (e) {
     return { info: null, variant: null, refusal: classify(e) };

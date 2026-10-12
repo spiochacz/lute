@@ -109,7 +109,7 @@ const CONTROLS: Control[] = [
   },
   { id: "NC12'", what: "coalesce hoists the barrier operations and merges across them (sandbox)", file: "sandbox.ts", from: "export function coalesce(ops: RootOp[]): RootOp[] {", to: "export function coalesce(ops: RootOp[]): RootOp[] {\n  return coalesceHoist(ops);", append: HOIST, expect: "caught", note: "piece_assembly, dom2md_incremental, fuzz (replaced NC12: equivalent)" },
   { id: "NC13'", what: "closeDocumentWriter replaced by a trim of LF only (assemble)", file: "assemble.ts", from: "closeDocumentWriter(R);", to: 'R.trimWriterTo(bytes.Trim(R.Writer.Bytes(), "\\n")); R.WriteByte(10);', expect: "caught", note: "piece_assembly, dom2md_incremental (footnotes blocks end in a four-space line)" },
-  { id: "NC14", what: "generated-id refusal removed (sandbox: the node ID counter of withoutNodeIDs is not compared)", file: "sandbox.ts", from: "if (ast.NewNodeIDCalls() !== before) {", to: "if (false) {", expect: "caught", note: "context_channels NC14 unit test (a renderer that writes a node ID must be refused); the fuzz normalises IDs" },
+  { id: "NC14", what: "generated-id refusal removed (sandbox render: a node ID that the log shows does not refuse the child)", file: "sandbox.ts", from: "if (generatedIDLeaks(b.ids, variant.ops)) {", to: "if (false) {", expect: "caught", note: "context_channels NC14 unit test (a renderer that writes a node ID must be refused); the fuzz normalises IDs" },
   {
     id: "NC15",
     what: "the render starts at LF whatever lastOut the key has (sandbox render; redefined in milestone C, C1: the accessor is gone)",

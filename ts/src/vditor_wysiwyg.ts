@@ -1184,7 +1184,11 @@ Lute.prototype.genASTByVditorDOM = function (this: Lute, n: html.Node, tree: par
         lute.genASTByVditorDOM(c, tree);
       }
     } else if ("link-ref-defs-block" === dataType) {
-      const text = util.DomText(n);
+      let text = util.DomText(n);
+      // Deliberate departure from upstream, tasks/002-upstream-bugs.md item 68 (oracle patch 0003): the definitions end their line, so that the next block does not continue it
+      if (!strings.HasSuffix(text, "\n")) {
+        text += "\n";
+      }
       const node = new ast.Node(ast.NodeText, conv.BytesFromString(text));
       tree.Context!.Tip!.AppendChild(node);
     } else if ("footnotes-block" === dataType) {
@@ -1233,6 +1237,8 @@ Lute.prototype.genASTByVditorDOM = function (this: Lute, n: html.Node, tree: par
 
   // PORT-NOTE: stands for the `defer tree.Context.ParentTip()` statements of Go's switch cases; at most one of them is registered per call.
   let deferParentTip = false;
+  // The paragraph of a P or Div case, whose deferred function also replaces a paragraph holding only a code block (see the finally)
+  let deferredParagraph: ast.Node | null = null;
   try {
     const cls = util.DomAttrValue(n, "class");
     let content = strings.ReplaceAll(n.Data, editor.Zwsp, "");
@@ -1280,6 +1286,7 @@ Lute.prototype.genASTByVditorDOM = function (this: Lute, n: html.Node, tree: par
         tree.Context!.Tip!.AppendChild(node);
         tree.Context!.Tip = node;
         deferParentTip = true;
+        deferredParagraph = node;
         break;
       case atom.H1:
       case atom.H2:
@@ -2220,6 +2227,16 @@ Lute.prototype.genASTByVditorDOM = function (this: Lute, n: html.Node, tree: par
   } finally {
     if (deferParentTip) {
       tree.Context!.ParentTip();
+    }
+    // Deliberate departure from upstream, tasks/002-upstream-bugs.md item 67 (oracle patch 0003): a paragraph whose only child is a code block
+    // (its text began with four spaces) is replaced by that code block, so that the Markdown has no extra blank lines after it
+    if (deferredParagraph !== null) {
+      const node = deferredParagraph;
+      const c = node.FirstChild;
+      if (c !== null && c === node.LastChild && ast.NodeCodeBlock === c.Type && node.Parent !== null) {
+        node.InsertBefore(c);
+        node.Unlink();
+      }
     }
   }
 };

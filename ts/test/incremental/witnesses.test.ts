@@ -22,7 +22,13 @@ const H1: Record<Mode, string> = {
   ir: '<h1 data-block="0" class="vditor-ir__node" id="ir-h" data-marker="#"><span class="vditor-ir__marker vditor-ir__marker--heading" data-type="heading-marker"># </span>h</h1>',
 };
 const LINK_REF_DEFS = '<div data-block="0" data-type="link-ref-defs-block">[r]: http://x</div>';
-const INDENTED = '<p data-block="0">    indented code</p>';
+// A fenced code block as the forward conversion writes it (Md2VditorDOM / Md2VditorIRDOM of "```\nx\n```\n"): a root-level block whose
+// blank line after it depends on whether it is last (isLast). An indented code block in a paragraph no longer shows this: since
+// tasks/002 item 67 the paragraph is replaced by its code block, and the old fixture's blank lines were the bug.
+const FENCED: Record<Mode, string> = {
+  wysiwyg: '<div class="vditor-wysiwyg__block" data-type="code-block" data-block="0" data-marker="```"><pre class="vditor-wysiwyg__pre" style="display: none"><code>x\n</code></pre><pre class="vditor-wysiwyg__preview" data-render="2"><code>x\n</code></pre></div>',
+  ir: '<div data-block="0" data-type="code-block" class="vditor-ir__node"><span data-type="code-block-open-marker">```</span><span class="vditor-ir__marker vditor-ir__marker--info" data-type="code-block-info">​</span><pre class="vditor-ir__marker--pre vditor-ir__marker"><code>x\n</code></pre><pre class="vditor-ir__preview" data-render="2"><code>x\n</code></pre><span data-type="code-block-close-marker">```</span></div>',
+};
 const BR_PARAGRAPH = '<p data-block="0">a<br>b</p>';
 const UL = '<ul data-tight="true" data-marker="*" data-block="0"><li data-marker="*">a</li></ul>';
 
@@ -36,11 +42,12 @@ interface Witness {
 }
 
 const WITNESSES: Witness[] = [
-  // isLast: the paragraph renders a nested code block, which reads Root.LastChild; after a heading the block is not last, so one blank line
-  // less would be wrong and two blank lines are the normal output
-  { field: "isLast", mode: "wysiwyg", d1: INDENTED, d2: INDENTED + H1.wysiwyg, out1: "```\nindented code\n```\n", out2: "```\nindented code\n```\n\n\n# h\n" },
-  { field: "isLast", mode: "ir", d1: INDENTED, d2: INDENTED + H1.ir, out1: "```\nindented code\n```\n", out2: "```\nindented code\n```\n\n\n# h\n" },
-  // prev: the link-ref-defs text has no trailing LF, so the heading needs newlineBeforeBlock, which reads prev
+  // isLast: the code block is last alone (one newline) and has a blank line after it when a heading follows
+  { field: "isLast", mode: "wysiwyg", d1: FENCED.wysiwyg, d2: FENCED.wysiwyg + H1.wysiwyg, out1: "```\nx\n```\n", out2: "```\nx\n```\n\n# h\n" },
+  { field: "isLast", mode: "ir", d1: FENCED.ir, d2: FENCED.ir + H1.ir, out1: "```\nx\n```\n", out2: "```\nx\n```\n\n# h\n" },
+  // prev: the old fixture (the link-ref-defs text had no trailing LF, so the heading needed newlineBeforeBlock, which reads prev). Since
+  // tasks/002 item 68 the text ends with a LF, the output no longer depends on prev, and no composable fixture was found (top-level text and
+  // inline tags fall back to the normal path): NC2 is not caught by this witness any more. Open, see the report of 2026-10-12.
   { field: "prev", mode: "wysiwyg", d1: H1.wysiwyg, d2: LINK_REF_DEFS + H1.wysiwyg, out1: "# h\n", out2: "[r]: http://x\n# h\n" },
   { field: "prev", mode: "ir", d1: H1.ir, d2: LINK_REF_DEFS + H1.ir, out1: "# h\n", out2: "[r]: http://x\n# h\n" },
   // domNext: the br rule of the paragraph reads the next sibling; a list after it changes the output

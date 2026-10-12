@@ -287,7 +287,11 @@ Lute.prototype.genASTByVditorIRDOM = function (this: Lute, n: html.Node, tree: p
           lute.genASTByVditorIRDOM(c, tree);
         }
       } else if ("link-ref-defs-block" === dataType) {
-        const text = util.DomText(n);
+        let text = util.DomText(n);
+        // Deliberate departure from upstream, tasks/002-upstream-bugs.md item 68 (oracle patch 0003): the definitions end their line, so that the next block does not continue it
+        if (!strings.HasSuffix(text, "\n")) {
+          text += "\n";
+        }
         const node = new ast.Node(ast.NodeText, conv.BytesFromString(text));
         tree.Context!.Tip!.AppendChild(node);
       } else if ("footnotes-def" === dataType) {
@@ -376,7 +380,16 @@ Lute.prototype.genASTByVditorIRDOM = function (this: Lute, n: html.Node, tree: p
         } else {
           tree.Context!.Tip!.AppendChild(node);
           tree.Context!.Tip = node;
-          deferred.push(() => tree.Context!.ParentTip());
+          deferred.push(() => {
+            tree.Context!.ParentTip();
+            // Deliberate departure from upstream, tasks/002-upstream-bugs.md item 67 (oracle patch 0003): a paragraph whose only child is a code block
+            // (its text began with four spaces) is replaced by that code block, so that the Markdown has no extra blank lines after it
+            const c = node.FirstChild;
+            if (c !== null && c === node.LastChild && ast.NodeCodeBlock === c.Type && node.Parent !== null) {
+              node.InsertBefore(c);
+              node.Unlink();
+            }
+          });
         }
         break;
       }

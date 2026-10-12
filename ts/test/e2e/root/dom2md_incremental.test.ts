@@ -8,6 +8,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { New, EnableIncrementalDom2Md, IncrementalDom2MdStats, DisableIncrementalDom2Md, editor } from "../../../src/index.ts";
+import { referenceEngine } from "../../incremental/reference_engine.ts";
 import type { Lute } from "../../../src/index.ts";
 import { REASONS } from "../../../src/incremental/piece.ts";
 import type { SetterCall } from "../helpers.ts";
@@ -49,7 +50,7 @@ for (const [index, set] of SETS.entries()) {
   }
   test(`dom2md incremental equals the normal path: ${set.name}`, () => {
     const a = New();
-    const b = New();
+    const b = referenceEngine();
     apply(a, set.setters);
     apply(b, set.setters);
     EnableIncrementalDom2Md(a, { strict: true, verify: true });

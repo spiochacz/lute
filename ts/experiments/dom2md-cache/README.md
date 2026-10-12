@@ -6,7 +6,7 @@ Not imported by `ts/src`, not part of `npm test`, not in `tsc`'s `include` (so `
 
 | File | Purpose |
 |---|---|
-| `engine-adapter.ts` | `EngineDom2Md`: engine A (the cache, strict, verify off) and engine B (the reference, same setters). The surface the fuzzer uses (`convert`, `uncached`, `stats`, `lastFallbackReason`, `clear`, `size`), plus `lastInconsistency` and `counters()` |
+| `engine-adapter.ts` | `EngineDom2Md`: engine A (the cache, strict, verify off) and engine B (the reference, same setters, policy "off" so that it is the normal path). The surface the fuzzer uses (`convert`, `uncached`, `stats`, `lastFallbackReason`, `clear`, `size`), plus `lastInconsistency` and `counters()` |
 | `fuzz.ts` | differential fuzzer: passes warm, cold, shared, evict; `--impl=engine` (default) or `--impl=prototype`; `--check=replay`; `--report=real` |
 | `negative-control.ts` | the controls of the 2026-10-11 analysis: one changed statement per scratch copy, the tests and the fuzzer run against each |
 | `cached.ts`, `scan.ts`, `corpus.ts`, `repro/` | the spike's prototype (`CachedDom2Md`, its own splitter, the corpus and the regression cases of the prototype); used by `--impl=prototype` and by `repro/` |
@@ -75,7 +75,7 @@ The controls of `negative-control.ts` (expectations of section 6 step 5 of the a
 | NC11 variants[0] always | assemble: lookup by key | caught | caught | regressions, edit simulation |
 | NC12 coalesce hoists barrier ops | sandbox: coalesce | caught | caught | 1608 mismatches and 818 inconsistencies |
 | NC13 closeDocumentWriter trims LF only | assemble: close | caught | caught | 6 mismatches (edit simulation, default) |
-| NC14 generated-id scan removed | sandbox render: text.includes(GENERATED_ID) | caught (unit) | caught | context_channels NC14 unit test only |
+| NC14 generated-id refusal removed | sandbox withoutNodeIDs: ast.NewNodeIDCalls is not compared | caught (unit) | caught | context_channels NC14 unit test (a renderer that writes a node ID is refused) |
 | NC15 render starts at LF | sandbox render: r.LastOut = 10 (redefined: the accessor is gone) | caught (unit) | caught | context_channels pinned lastOut witness only |
 
 Milestone C (C1) changed the anchors: isFirst and isLast are no fields any more, so NC1 moved to the root LastChild link, NC3 to the Next link, NC5 to the key, NC15 to the render start. Baseline (no change) green: 89 tests, 0 mismatches in four fuzz passes.

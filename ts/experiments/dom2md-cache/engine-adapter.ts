@@ -6,7 +6,7 @@
 // Two additions over the prototype's surface: lastInconsistency (the reason of an IncrementalInconsistency thrown by A in strict mode; the
 // fuzzer counts it as a mismatch even when B throws too) and counters() (evictions, too-large fallbacks, inconsistencies, cumulative).
 
-import { New, EnableIncrementalDom2Md, DisableIncrementalDom2Md, IncrementalDom2MdStats, IncrementalInconsistency } from "../../src/index.ts";
+import { New, EnableIncrementalDom2Md, DisableIncrementalDom2Md, IncrementalDom2MdStats, IncrementalInconsistency, SetIncrementalDom2MdPolicy } from "../../src/index.ts";
 import type { Lute } from "../../src/index.ts";
 import type { SetterCall } from "../../test/e2e/helpers.ts";
 
@@ -52,6 +52,8 @@ export class EngineDom2Md {
     this.a = New();
     applySetters(this.a, setters);
     this.b = New();
+    // the reference is the normal path: policy off (a new engine is "auto", which could start the cache itself)
+    SetIncrementalDom2MdPolicy(this.b, "off");
     applySetters(this.b, setters);
     this.enable();
   }

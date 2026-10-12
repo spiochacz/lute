@@ -9,6 +9,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { New, EnableIncrementalDom2Md, DisableIncrementalDom2Md, IncrementalDom2MdStats, editor } from "../../src/index.ts";
+import { referenceEngine } from "./reference_engine.ts";
 import type { Lute } from "../../src/index.ts";
 import { Lcg, pool, start, step } from "./edit_generator.ts";
 
@@ -42,7 +43,7 @@ for (const mode of ["wysiwyg", "ir"] as const) {
       const rng = new Lcg(mode === "wysiwyg" ? 1 : 2);
       const shared = New();
       EnableIncrementalDom2Md(shared, { strict: true, verify: true });
-      const reference = New();
+      const reference = referenceEngine();
       let left = COMPARISONS;
       let warm: Lute | null = null;
       let warmLeft = 0;

@@ -1400,9 +1400,20 @@ export function SetTesting(v: boolean): void {
   testing = v;
 }
 
+// newNodeIDCalls counts the calls of NewNodeID (the counter of NewNodeIDCalls).
+let newNodeIDCalls = 0;
+
+// NewNodeIDCalls returns the number of calls of NewNodeID so far. The per-child cache reads it before and after a phase: a phase that moved it
+// created a node ID, and the child is refused (src/incremental/sandbox.ts, withoutNodeIDs).
+// PORT-NOTE: new in the port, no Go counterpart; it is only read by the incremental cache.
+export function NewNodeIDCalls(): number {
+  return newNodeIDCalls;
+}
+
 // NewNodeID returns a new node ID: local time as yyyymmddhhmmss, then "-" and 7 random characters a-z0-9.
 // With testing on it returns the fixed test ID.
 export function NewNodeID(): string {
+  newNodeIDCalls++;
   if (testing) {
     return "20060102150405-1a2b3c4"; // test environment ID
   }

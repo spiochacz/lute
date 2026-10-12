@@ -5,7 +5,7 @@
 //
 // Milestone C, C1 (restated on the key): there is no read recording, so "never read" and "read only after a text node" are checked at the
 // level of the log: a field that a run never reads cannot change its output. isFirst and isLast are no fields any more (invariant I1).
-// The NC14 unit test (the generated-id scan) is here too. Default run: the COVERED sweep covers every 8th candidate; test:full covers all
+// The NC14 unit test (the generated-id refusal) is here too. Default run: the COVERED sweep covers every 8th candidate; test:full covers all
 // of them (test/e2e/full.ts).
 
 import { test } from "node:test";
@@ -137,8 +137,8 @@ for (const p of PINNED) {
   });
 }
 
-// NC14 (unit): the generated-id scan refuses a child whose output contains the fixed generated ID. The prototype of the renderer writes a new
-// ID; the same child must compose when the renderer is not patched (the control that makes the refusal meaningful).
+// NC14 (unit): the generated-id refusal (withoutNodeIDs, ast.NewNodeIDCalls) refuses a child whose render creates a node ID. The prototype of
+// the renderer writes a new ID; the same child must compose when the renderer is not patched (the control that makes the refusal meaningful).
 test("NC14: a child whose output contains a generated node ID is refused as generated-id", () => {
   const html = '<p data-block="0">x</p>';
   const proto = FormatRenderer.prototype as unknown as { renderParagraph: (n: ast.Node, e: boolean) => ast.WalkStatus };

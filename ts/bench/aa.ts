@@ -13,6 +13,11 @@
 // is counted within +-5%, +-10% and +-20%. A row with a zero or non-finite time
 // on either side is a DEFECT: it is listed, counted, and left out of the
 // percentages. Nothing is dropped silently.
+// Processes discarded by the canary rule (bench/lib/canary.ts; the runner sets
+// processesUsed) are ignored here: the row statistics are already over the kept
+// processes. A row whose side has no kept process gets no verdict; it is counted
+// and listed apart. Result files written before the canary have no processesUsed
+// and are read as before.
 
 import { readFileSync, existsSync } from "node:fs";
 import { spawnSync } from "node:child_process";
@@ -42,8 +47,15 @@ interface Stat {
 interface Row {
   group: string;
   impl: "A" | "B" | string;
+  processes?: number;
+  processesUsed?: number;
   nsPerUnit: Stat;
   bytesPerOp: { median: number } | null;
+}
+
+// Processes not discarded by the canary rule. Old files (no processesUsed) count every process.
+function usedOf(r: Row): number {
+  return r.processesUsed ?? r.processes ?? 0;
 }
 
 const file = `${RESULTS}runtime-micro.${tag}.json`;
@@ -65,12 +77,23 @@ function badTime(x: number): boolean {
 }
 
 const defects: string[] = [];
+const noVerdict: string[] = [];
 const ratios: { id: string; r: number }[] = [];
 const allocDiff: { id: string; d: number }[] = [];
 let nullAlloc = 0;
+let discardedProcesses = 0;
+let totalProcesses = 0;
 for (const [id, pair] of sides) {
   if (pair.A === undefined || pair.B === undefined) {
     defects.push(`${id}: side missing`);
+    continue;
+  }
+  for (const side of [pair.A, pair.B]) {
+    totalProcesses += side.processes ?? 0;
+    discardedProcesses += (side.processes ?? 0) - usedOf(side);
+  }
+  if (usedOf(pair.A) === 0 || usedOf(pair.B) === 0) {
+    noVerdict.push(`${id}: all processes of one side discarded by the canary rule`);
     continue;
   }
   const a = pair.A.nsPerUnit.fastest;
@@ -91,7 +114,8 @@ for (const [id, pair] of sides) {
 }
 
 const n = ratios.length;
-console.log(`A/A rows compared (fastest process per side): ${n}; defects listed below (not in the percentages): ${defects.length}`);
+console.log(`processes discarded by the canary rule: ${discardedProcesses} of ${totalProcesses} (left out of every row below)`);
+console.log(`A/A rows compared (fastest process per side): ${n}; defects listed below (not in the percentages): ${defects.length}; no verdict: ${noVerdict.length}`);
 for (const p of [0.05, 0.1, 0.2]) {
   const k = ratios.filter((x) => Math.abs(x.r) <= p).length;
   console.log(`  within +-${(p * 100).toFixed(0)}%: ${k}/${n} (${n === 0 ? "n/a" : ((100 * k) / n).toFixed(1)}%)`);
@@ -107,6 +131,12 @@ console.log(
 );
 for (const x of allocBad) {
   console.log(`  ${x.id} differs by ${(100 * x.d).toFixed(1)}%`);
+}
+if (noVerdict.length > 0) {
+  console.log(`\nNO VERDICT (${noVerdict.length}):`);
+  for (const v of noVerdict) {
+    console.log(`  ${v}`);
+  }
 }
 if (defects.length > 0) {
   console.log(`\nDEFECTS (${defects.length}):`);

@@ -29,7 +29,7 @@ import * as util from "./util/index.ts";
 import { FormatNodeSync } from "./lute.ts";
 import { Lute } from "./types.ts";
 // PORT-NOTE: hook for the per-child cache (tasks/004), no behaviour change: the only import of src/incremental/.
-import { incrementalActive, tryIncrementalDom2Md } from "./incremental/dispatch.ts";
+import { incrementalActive, incrementalAuto, tryIncrementalDom2Md } from "./incremental/dispatch.ts";
 
 declare module "./types.ts" {
   interface Lute {
@@ -166,7 +166,7 @@ Lute.prototype.VditorDOM2Md = function (this: Lute, htmlStr: string): string {
   let markdown = "";
   htmlStr = strings.ReplaceAll(htmlStr, editor.Zwsp, "");
   // PORT-NOTE: hook for the per-child cache (tasks/004), no behaviour change: with no engine having the cache enabled this is one integer test.
-  if (0 !== incrementalActive.count) {
+  if (0 !== incrementalActive.count || htmlStr.length >= incrementalAuto.minLength) {
     const composed = tryIncrementalDom2Md(lute, "wysiwyg", htmlStr);
     if (null !== composed) {
       markdown = strings.ReplaceAll(composed, editor.Zwsp, "");
@@ -327,70 +327,95 @@ Lute.prototype.vditorDOM2Md = function (this: Lute, htmlStr: string): string {
   return markdown;
 };
 
+// AdjustVditorDOMPassName is the name of a method of Lute that is one pass of adjustVditorDOM (the entries of ADJUST_VDITOR_DOM_PASSES).
+export type AdjustVditorDOMPassName =
+  | "removeEmptyNodes"
+  | "removeHighlightJSSpans"
+  | "removeWbr"
+  | "mergeVditorDOMList0"
+  | "adjustVditorDOMListTight0"
+  | "adjustVditorDOMListList"
+  | "adjustVditorDOMListItemInP"
+  | "removeCodeCode"
+  | "adjustVditorDOMCodeA"
+  | "adjustTag"
+  | "mergeSameStrong"
+  | "adjustTableCode"
+  | "adjustMath"
+  | "adjustNoscriptImg"
+  | "adjustBlockInTable";
+
+// AdjustVditorDOMPass is one entry of the table of the DOM passes (the single list of the passes; adjustVditorDOM runs it and the sandbox of the
+// per-child cache, src/incremental/sandbox.ts, imports it).
+// name: the method of Lute that runs the pass, looked up on the engine when the pass runs.
+// scope: "root" when the pass takes the root of the body, "child" when it takes a top-level child.
+// walk: how the pass visits the top-level nodes of the root. "root": once, with the root. "first": once, with the first child (when there is one).
+//   "siblings": with each top-level child in turn, the next sibling read after the call. "siblingsNext": with each top-level child, the next
+//   sibling read before the call (the pass may unlink the child it is called with).
+// phase: the phase of the sandbox that runs the pass for one child. "analyse" passes run before the DOM neighbours are linked, "build" passes
+//   run with the links in place (sandbox.ts, invariant of section 3).
+// PORT-NOTE: perf, departs from vditor_wysiwyg.go:179-181: removeWbr is walked "first", one call instead of a loop over the siblings.
+//   removeWbr(c) already collects the matching wbr nodes of c and of all its following siblings (and their
+//   descendants) and only then unlinks them; a later call would only walk the same nodes again and find
+//   nothing, and the loop ends after a matching FirstChild anyway because Unlink clears NextSibling.
+//   So a single call on root.FirstChild unlinks exactly the same nodes.
+export interface AdjustVditorDOMPass {
+  name: AdjustVditorDOMPassName;
+  scope: "root" | "child";
+  walk: "root" | "first" | "siblings" | "siblingsNext";
+  phase: "analyse" | "build";
+}
+
+// ADJUST_VDITOR_DOM_PASSES is the order of the DOM passes of adjustVditorDOM.
+export const ADJUST_VDITOR_DOM_PASSES: readonly AdjustVditorDOMPass[] = [
+  { name: "removeEmptyNodes", scope: "root", walk: "root", phase: "analyse" },
+  { name: "removeHighlightJSSpans", scope: "root", walk: "root", phase: "analyse" },
+  { name: "removeWbr", scope: "child", walk: "first", phase: "analyse" },
+  { name: "mergeVditorDOMList0", scope: "child", walk: "siblings", phase: "build" },
+  { name: "adjustVditorDOMListTight0", scope: "child", walk: "siblings", phase: "build" },
+  { name: "adjustVditorDOMListList", scope: "child", walk: "siblings", phase: "build" },
+  { name: "adjustVditorDOMListItemInP", scope: "child", walk: "siblings", phase: "build" },
+  { name: "removeCodeCode", scope: "child", walk: "siblingsNext", phase: "build" },
+  { name: "adjustVditorDOMCodeA", scope: "child", walk: "siblingsNext", phase: "build" },
+  { name: "adjustTag", scope: "child", walk: "siblings", phase: "build" },
+  { name: "mergeSameStrong", scope: "child", walk: "siblings", phase: "build" },
+  { name: "adjustTableCode", scope: "child", walk: "siblings", phase: "build" },
+  { name: "adjustMath", scope: "child", walk: "siblings", phase: "build" },
+  { name: "adjustNoscriptImg", scope: "child", walk: "siblings", phase: "build" },
+  { name: "adjustBlockInTable", scope: "child", walk: "siblings", phase: "build" },
+];
+
+// runAdjustVditorDOMPass runs one pass of the table on the top-level nodes of root, as the walk of the pass says.
+export function runAdjustVditorDOMPass(lute: Lute, pass: AdjustVditorDOMPass, root: html.Node): void {
+  const f = lute[pass.name] as (this: Lute, n: html.Node) => void;
+  switch (pass.walk) {
+    case "root":
+      f.call(lute, root);
+      break;
+    case "first":
+      if (null !== root.FirstChild) {
+        f.call(lute, root.FirstChild);
+      }
+      break;
+    case "siblings":
+      for (let c = root.FirstChild; null !== c; c = c.NextSibling) {
+        f.call(lute, c);
+      }
+      break;
+    case "siblingsNext":
+      for (let c = root.FirstChild; null !== c;) {
+        const next = c.NextSibling;
+        f.call(lute, c);
+        c = next;
+      }
+      break;
+  }
+}
+
 Lute.prototype.adjustVditorDOM = function (this: Lute, root: html.Node): void {
   const lute = this;
-  lute.removeEmptyNodes(root);
-  lute.removeHighlightJSSpans(root);
-
-  // PORT-NOTE: perf, departs from vditor_wysiwyg.go:179-181: one call instead of a loop over the siblings.
-  // removeWbr(c) already collects the matching wbr nodes of c and of all its following siblings (and their
-  // descendants) and only then unlinks them; a later call would only walk the same nodes again and find
-  // nothing, and the loop ends after a matching FirstChild anyway because Unlink clears NextSibling.
-  // So a single call on root.FirstChild unlinks exactly the same nodes.
-  if (null !== root.FirstChild) {
-    lute.removeWbr(root.FirstChild);
-  }
-
-  for (let c = root.FirstChild; null !== c; c = c.NextSibling) {
-    lute.mergeVditorDOMList0(c);
-  }
-
-  for (let c = root.FirstChild; null !== c; c = c.NextSibling) {
-    lute.adjustVditorDOMListTight0(c);
-  }
-
-  for (let c = root.FirstChild; null !== c; c = c.NextSibling) {
-    lute.adjustVditorDOMListList(c);
-  }
-
-  for (let c = root.FirstChild; null !== c; c = c.NextSibling) {
-    lute.adjustVditorDOMListItemInP(c);
-  }
-
-  for (let c = root.FirstChild; null !== c;) {
-    const next = c.NextSibling;
-    lute.removeCodeCode(c);
-    c = next;
-  }
-
-  for (let c = root.FirstChild; null !== c;) {
-    const next = c.NextSibling;
-    lute.adjustVditorDOMCodeA(c);
-    c = next;
-  }
-
-  for (let c = root.FirstChild; null !== c; c = c.NextSibling) {
-    lute.adjustTag(c);
-  }
-
-  for (let c = root.FirstChild; null !== c; c = c.NextSibling) {
-    lute.mergeSameStrong(c);
-  }
-
-  for (let c = root.FirstChild; null !== c; c = c.NextSibling) {
-    lute.adjustTableCode(c);
-  }
-
-  for (let c = root.FirstChild; null !== c; c = c.NextSibling) {
-    lute.adjustMath(c);
-  }
-
-  for (let c = root.FirstChild; null !== c; c = c.NextSibling) {
-    lute.adjustNoscriptImg(c);
-  }
-
-  for (let c = root.FirstChild; null !== c; c = c.NextSibling) {
-    lute.adjustBlockInTable(c);
+  for (const pass of ADJUST_VDITOR_DOM_PASSES) {
+    runAdjustVditorDOMPass(lute, pass, root);
   }
 };
 

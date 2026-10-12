@@ -1,0 +1,58 @@
+--- a/vditor_ir.go
++++ b/vditor_ir.go
+@@ -182,6 +182,10 @@
+ 			}
+ 		} else if "link-ref-defs-block" == dataType {
+ 			text := util.DomText(n)
++			if !strings.HasSuffix(text, "\n") {
++				// The definitions end their line, so that the next block does not continue it
++				text += "\n"
++			}
+ 			node := &ast.Node{Type: ast.NodeText, Tokens: []byte(text)}
+ 			tree.Context.Tip.AppendChild(node)
+ 		} else if "footnotes-def" == dataType {
+@@ -262,7 +266,14 @@
+ 		} else {
+ 			tree.Context.Tip.AppendChild(node)
+ 			tree.Context.Tip = node
+-			defer tree.Context.ParentTip()
++			defer func() {
++				tree.Context.ParentTip()
++				// A paragraph whose only child is a code block (its text began with four spaces) is replaced by that code block
++				if c := node.FirstChild; nil != c && c == node.LastChild && ast.NodeCodeBlock == c.Type && nil != node.Parent {
++					node.InsertBefore(c)
++					node.Unlink()
++				}
++			}()
+ 		}
+ 	case atom.H1, atom.H2, atom.H3, atom.H4, atom.H5, atom.H6:
+ 		text := util.DomText(n)
+--- a/vditor_wysiwyg.go
++++ b/vditor_wysiwyg.go
+@@ -911,6 +911,10 @@
+ 			}
+ 		} else if "link-ref-defs-block" == dataType {
+ 			text := util.DomText(n)
++			if !strings.HasSuffix(text, "\n") {
++				// The definitions end their line, so that the next block does not continue it
++				text += "\n"
++			}
+ 			node := &ast.Node{Type: ast.NodeText, Tokens: []byte(text)}
+ 			tree.Context.Tip.AppendChild(node)
+ 		} else if "footnotes-block" == dataType {
+@@ -991,7 +995,14 @@
+ 		node.Type = ast.NodeParagraph
+ 		tree.Context.Tip.AppendChild(node)
+ 		tree.Context.Tip = node
+-		defer tree.Context.ParentTip()
++		defer func() {
++			tree.Context.ParentTip()
++			// A paragraph whose only child is a code block (its text began with four spaces) is replaced by that code block
++			if c := node.FirstChild; nil != c && c == node.LastChild && ast.NodeCodeBlock == c.Type && nil != node.Parent {
++				node.InsertBefore(c)
++				node.Unlink()
++			}
++		}()
+ 	case atom.H1, atom.H2, atom.H3, atom.H4, atom.H5, atom.H6:
+ 		if "" == strings.TrimSpace(util.DomText(n)) {
+ 			return

@@ -9,6 +9,7 @@ import assert from "node:assert/strict";
 import * as ast from "../../../src/ast/index.ts";
 import * as html from "../../../src/html/index.ts";
 import { New, EnableIncrementalDom2Md, DisableIncrementalDom2Md, IncrementalDom2MdStats, IncrementalInconsistency } from "../../../src/index.ts";
+import { referenceEngine } from "../../incremental/reference_engine.ts";
 import type { Lute } from "../../../src/index.ts";
 import { FormatRenderer } from "../../../src/render/types.ts";
 import { Lute as LuteClass } from "../../../src/types.ts";
@@ -49,7 +50,7 @@ test("barrier violation: strict mode throws IncrementalInconsistency, normal mod
       DisableIncrementalDom2Md(strict);
 
       const normal = New();
-      const reference = New();
+      const reference = referenceEngine();
       EnableIncrementalDom2Md(normal, {});
       const want = reference.VditorDOM2Md(TWO);
       const got = normal.VditorDOM2Md(TWO);
@@ -64,7 +65,7 @@ test("barrier violation: strict mode throws IncrementalInconsistency, normal mod
 });
 
 // generated-id: the sandbox run prints a node ID (SetTesting(true) makes it fixed); the variant is refused, not thrown.
-test("generated-id: a variant whose output contains the fixed ID is an unsupported fallback, in both modes", () => {
+test("generated-id: a child whose render creates a node ID is an unsupported fallback, in both modes", () => {
   withPatch(
     FormatRenderer.prototype,
     "renderParagraph",
@@ -103,7 +104,7 @@ test("engine-threw: the sandbox exception is an unsupported fallback, and the sa
       },
     () => {
       const a = New();
-      const b = New();
+      const b = referenceEngine();
       EnableIncrementalDom2Md(a, { strict: true });
       let errA = "";
       let errB = "";

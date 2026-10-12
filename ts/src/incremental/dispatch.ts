@@ -10,6 +10,10 @@ export type IncrementalMode = "wysiwyg" | "ir";
 // incrementalActive.count is the number of engines that have the cache enabled.
 export const incrementalActive = { count: 0 };
 
+// incrementalAuto.minLength is the length from which the wrappers call the handler for an engine with no cache state (the policy "auto" of
+// policy.ts decides then). It is Infinity until the module is loaded; index.ts sets it when it registers the handler.
+export const incrementalAuto = { minLength: Infinity };
+
 export type IncrementalHandler = (lute: Lute, mode: IncrementalMode, html: string) => string | null;
 
 let handler: IncrementalHandler | null = null;

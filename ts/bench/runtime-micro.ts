@@ -18,6 +18,14 @@
 // times. Two separate runs cannot be compared (the machine drifts 15-35% over
 // minutes): compare only impls of one group within one run, see bench/compare.ts.
 //
+// Canary and discard (bench/lib/canary.ts, same rule as bench/macro.ts): each child times a fixed
+// arithmetic loop before and after its measurement. On this machine every process slows down 2.2 to
+// 2.6 times after 2 to 3 s of sustained work, so a process whose canary says it ran in the slow
+// window is discarded: it is kept in the JSON (perProcess, discarded: true, with the reason) and
+// left out of the statistics and the comparison. Never compare the first call against later calls
+// inside one process, and treat absolute times from processes longer than 2 s as inflated.
+//
+
 // Each run writes a fresh bench/results/runtime-micro.<tag>.json (nothing is
 // merged into an older file): per process the ns/unit and ns/op, the fastest,
 // median and spread, bytes/op (median, min, max), checksum, iteration counts, and
@@ -43,6 +51,7 @@ import { AppendLegacy, AppendByteLegacy } from "./legacy/append-legacy.ts";
 import { EscapeHTMLLegacy } from "./legacy/escape-legacy.ts";
 import * as escapeEncode from "../src/html/escape_encode.ts";
 import { allocBytesPerOp, bench, gcSeenDuring, machineInfo, type MachineInfo } from "./lib/micro.ts";
+import { CANARY_ITERATIONS, CANARY_MAX_RATIO, canaryMs, canaryWarmUp, judgeCanaries, makeCanary, type Canary, type Judged } from "./lib/canary.ts";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const RESULTS_DIR = fileURLToPath(new URL("./results/", import.meta.url));
@@ -712,7 +721,10 @@ async function runChild(id: string): Promise<void> {
   if (def === undefined) {
     throw new Error(`unknown row id: ${id}`);
   }
+  canaryWarmUp();
+  const startMs = canaryMs();
   const t = await bench(def.fn, { unit: def.unit, unitsPerOp: def.unitsPerOp });
+  const endMs = canaryMs();
   const a = await allocBytesPerOp(def.fn, 256);
   const out = {
     id,
@@ -725,6 +737,7 @@ async function runChild(id: string): Promise<void> {
     checksum: t.checksum,
     bytesPerOp: a.bytesPerOp,
     opsMeasured: a.opsMeasured,
+    canary: makeCanary(startMs, endMs),
   };
   process.stdout.write(`ROW_RESULT ${JSON.stringify(out)}\n`);
 }
@@ -745,6 +758,16 @@ export interface Stat {
   spread: number; // max / min over the processes
 }
 
+// One process of a row. Discard flags are set once the whole run is known (finalizeRows).
+export interface ProcessDetail extends Judged {
+  nsPerUnit: number;
+  nsPerOp: number;
+  bytesPerOp: number | null;
+  itersPerBatch: number;
+  batches: number;
+  opsMeasured: number;
+}
+
 export interface RowResult {
   id: string; // group|impl (in --aa mode: group|A or group|B)
   group: string; // group.name|input, or the row id in --aa mode
@@ -753,13 +776,15 @@ export interface RowResult {
   impl: string; // runtime, ref, legacy, or A / B in --aa mode
   unit: string;
   unitsPerOp: number;
-  processes: number;
+  processes: number; // processes run
+  processesUsed: number; // processes not discarded by the canary rule; the statistics below are over these
   nsPerUnit: Stat;
   nsPerOp: Stat;
   bytesPerOp: { perProcess: number[]; median: number; min: number; max: number } | null;
   checksum: number;
   iterationsPerBatch: number[];
   opsMeasured: number[];
+  perProcess: ProcessDetail[]; // every process, with its canary and discard flag
 }
 
 interface ChildResult {
@@ -771,6 +796,7 @@ interface ChildResult {
   checksum: number;
   bytesPerOp: number | null;
   opsMeasured: number;
+  canary: Canary | null;
 }
 
 interface Entry {
@@ -788,7 +814,11 @@ function median(xs: number[]): number {
   return s[s.length >> 1];
 }
 
+// A row with no process left after the discard rule gets zeros (aa.ts and compare.ts check processesUsed first).
 function stat(xs: number[]): Stat {
+  if (xs.length === 0) {
+    return { perProcess: [], fastest: 0, median: 0, spread: 0 };
+  }
   return {
     perProcess: xs,
     fastest: Math.min(...xs),
@@ -840,16 +870,13 @@ function spawnMeasurement(id: string): ChildResult {
   return JSON.parse(line.slice("ROW_RESULT ".length)) as ChildResult;
 }
 
+// Builds the row from its processes. The statistics are set by restat, after the discard flags.
 function summarise(g: Group, e: Entry, per: ChildResult[]): RowResult {
   const checksums = new Set(per.map((p) => p.checksum));
   if (checksums.size !== 1) {
     throw new Error(`checksum differs between processes for ${e.def.id}: ${[...checksums].join(", ")}`);
   }
-  const nsUnit = per.map((p) => p.nsPerUnit);
-  const nsOp = per.map((p) => p.nsPerOp);
-  const bytesVals = per.map((p) => p.bytesPerOp);
-  const bytesOk = bytesVals.every((v): v is number => v !== null) ? bytesVals : null;
-  return {
+  const row: RowResult = {
     id: `${g.key}|${e.label}`,
     group: g.key,
     name: e.def.name,
@@ -858,15 +885,58 @@ function summarise(g: Group, e: Entry, per: ChildResult[]): RowResult {
     unit: e.def.unit,
     unitsPerOp: e.def.unitsPerOp,
     processes: per.length,
-    nsPerUnit: stat(nsUnit),
-    nsPerOp: stat(nsOp),
-    bytesPerOp: bytesOk
-      ? { perProcess: bytesOk, median: median(bytesOk), min: Math.min(...bytesOk), max: Math.max(...bytesOk) }
-      : null,
+    processesUsed: per.length,
+    nsPerUnit: stat([]),
+    nsPerOp: stat([]),
+    bytesPerOp: null,
     checksum: per[0].checksum,
-    iterationsPerBatch: per.map((p) => p.itersPerBatch),
-    opsMeasured: per.map((p) => p.opsMeasured),
+    iterationsPerBatch: [],
+    opsMeasured: [],
+    perProcess: per.map((p) => ({
+      nsPerUnit: p.nsPerUnit,
+      nsPerOp: p.nsPerOp,
+      bytesPerOp: p.bytesPerOp,
+      itersPerBatch: p.itersPerBatch,
+      batches: p.batches,
+      opsMeasured: p.opsMeasured,
+      canary: p.canary,
+      discarded: false,
+      discardReason: null,
+    })),
   };
+  restat(row);
+  return row;
+}
+
+// Statistics of a row over the processes that were not discarded.
+function restat(row: RowResult): void {
+  const kept = row.perProcess.filter((p) => !p.discarded);
+  row.processesUsed = kept.length;
+  if (kept.length === 0) {
+    row.nsPerUnit = stat([]);
+    row.nsPerOp = stat([]);
+    row.bytesPerOp = null;
+    row.iterationsPerBatch = [];
+    row.opsMeasured = [];
+    return;
+  }
+  row.nsPerUnit = stat(kept.map((p) => p.nsPerUnit));
+  row.nsPerOp = stat(kept.map((p) => p.nsPerOp));
+  const bytesVals = kept.map((p) => p.bytesPerOp);
+  const bytesOk = bytesVals.every((v): v is number => v !== null) ? bytesVals : null;
+  row.bytesPerOp = bytesOk
+    ? { perProcess: bytesOk, median: median(bytesOk), min: Math.min(...bytesOk), max: Math.max(...bytesOk) }
+    : null;
+  row.iterationsPerBatch = kept.map((p) => p.itersPerBatch);
+  row.opsMeasured = kept.map((p) => p.opsMeasured);
+}
+
+// Judges every process of the run (the fastest start canary is run-wide), then restates every row.
+function finalizeRows(rows: RowResult[]): void {
+  judgeCanaries(rows.flatMap((r) => r.perProcess));
+  for (const r of rows) {
+    restat(r);
+  }
 }
 
 function measureGroup(g: Group, rounds: number): RowResult[] {
@@ -912,9 +982,14 @@ function runner(): void {
   // The file is written fresh and rewritten after every group, so a run that is
   // stopped early still leaves the groups it finished.
   const save = (): void => {
+    finalizeRows(rows);
     writeFileSync(
       file,
-      JSON.stringify({ tag, mode: aa ? "aa" : "interleaved", rounds, machine, rows }, null, 2) + "\n",
+      JSON.stringify(
+        { tag, mode: aa ? "aa" : "interleaved", rounds, machine, canary: { iterations: CANARY_ITERATIONS, maxRatio: CANARY_MAX_RATIO }, rows },
+        null,
+        2,
+      ) + "\n",
     );
   };
   save();

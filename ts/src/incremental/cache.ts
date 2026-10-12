@@ -33,6 +33,8 @@ export interface IncrementalStats {
   bytesHeld: number;
   evictions: number;
   optionClears: number;
+  autoStarts: number; // automatic starts of the cache (policy "auto", policy.ts); kept by the policy record, not by State
+  autoBackoffs: number; // automatic back-offs (policy.ts)
 }
 
 export function newStats(): IncrementalStats {
@@ -55,6 +57,8 @@ export function newStats(): IncrementalStats {
     bytesHeld: 0,
     evictions: 0,
     optionClears: 0,
+    autoStarts: 0,
+    autoBackoffs: 0,
   };
 }
 

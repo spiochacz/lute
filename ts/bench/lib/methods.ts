@@ -44,6 +44,10 @@ export function findMethod(name: string): MethodSpec | undefined {
 // as in test/e2e/bundle_driver.mjs; everything else on a default engine.
 export function makeEngine(lute: LuteGlobal, spec: MethodSpec): Engine {
   const engine = lute.New();
+  // The bundle's engines have the per-child cache's automatic policy: the benchmark rows measure the normal path, so it is off here.
+  if (typeof engine.SetIncrementalDom2Md === "function") {
+    engine.SetIncrementalDom2Md(false);
+  }
   if (spec.config === "wysiwyg") {
     engine.SetVditorWYSIWYG(true);
   }

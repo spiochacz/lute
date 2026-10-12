@@ -27,7 +27,7 @@ import * as render from "./render/index.ts";
 import * as util from "./util/index.ts";
 import { Lute } from "./types.ts";
 // PORT-NOTE: hook for the per-child cache (tasks/004), no behaviour change: the only import of src/incremental/.
-import { incrementalActive, tryIncrementalDom2Md } from "./incremental/dispatch.ts";
+import { incrementalActive, incrementalAuto, tryIncrementalDom2Md } from "./incremental/dispatch.ts";
 
 declare module "./types.ts" {
   interface Lute {
@@ -114,7 +114,7 @@ Lute.prototype.VditorIRDOM2Md = function (this: Lute, htmlStr: string): string {
   let markdown = "";
   htmlStr = strings.ReplaceAll(htmlStr, editor.Zwsp, "");
   // PORT-NOTE: hook for the per-child cache (tasks/004), no behaviour change: with no engine having the cache enabled this is one integer test.
-  if (0 !== incrementalActive.count) {
+  if (0 !== incrementalActive.count || htmlStr.length >= incrementalAuto.minLength) {
     const composed = tryIncrementalDom2Md(lute, "ir", htmlStr);
     if (null !== composed) {
       markdown = strings.ReplaceAll(composed, editor.Zwsp, "");

@@ -50,9 +50,14 @@ test("the global object has the same keys, version and constants", () => {
   assert.deepEqual(port.consts, reference.consts);
 });
 
-test("an engine has the same function-valued keys", () => {
+// The two methods of the per-child cache (src/incremental/index.ts: SetIncrementalDom2Md, IncrementalDom2MdStats) have no Go counterpart and are
+// the only function-valued members that the port adds to an engine (ts/PORTING.md, "Code without a Go counterpart"). They are listed here by name;
+// any other difference is a failure.
+const PORT_ONLY_ENGINE_FUNCTIONS = ["IncrementalDom2MdStats", "SetIncrementalDom2Md"];
+
+test("an engine has the same function-valued keys, plus the two methods of the per-child cache", () => {
   const { port, reference } = both();
-  assert.deepEqual(port.engineFunctions, reference.engineFunctions);
+  assert.deepEqual(port.engineFunctions, [...reference.engineFunctions, ...PORT_ONLY_ENGINE_FUNCTIONS].sort());
   assert.ok(port.engineFunctions.length >= 152, `only ${port.engineFunctions.length} functions`);
 });
 

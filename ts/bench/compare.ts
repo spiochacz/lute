@@ -19,6 +19,11 @@
 //   (relative to the larger), otherwise 'X.XXx more' or 'X.XXx less'.
 // - Spread: max / min over the processes of one impl. Flagged UNSTABLE above 1.5.
 // - A zero or non-finite time is printed as DEFECT, never dropped.
+// - Processes discarded by the canary rule (bench/lib/canary.ts) are left out: the
+//   row statistics are over the kept processes (processesUsed). An impl with no kept
+//   process gets NO VERDICT, and so does every impl compared with such a baseline.
+//   The line says how many processes were discarded. Old files have no processesUsed
+//   and are read as before.
 
 import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -39,8 +44,15 @@ interface Row {
   group: string;
   impl: string;
   unit: string;
+  processes?: number;
+  processesUsed?: number;
   nsPerUnit: Stat;
   bytesPerOp: { median: number } | null;
+}
+
+// Processes not discarded by the canary rule. Old files (no processesUsed) count every process.
+function usedOf(r: Row): number {
+  return r.processesUsed ?? r.processes ?? 0;
 }
 
 function fail(message: string): never {
@@ -131,6 +143,12 @@ for (const key of keys) {
   const base = baselineOf(list);
   const parts = list.map((r) => {
     const isBase = r === base;
+    const run = r.processes ?? 0;
+    const used = usedOf(r);
+    if (used === 0) {
+      return `${r.impl} NO VERDICT (all ${run} processes discarded)`;
+    }
+    const discardNote = used < run ? `, ${run - used} of ${run} processes discarded` : "";
     const fmtd = isDefect(r) ? "DEFECT" : `${fmtNs(r.nsPerUnit.fastest)} ${r.unit}`;
     const bytes = r.bytesPerOp === null ? "null" : String(Math.round(r.bytesPerOp.median));
     const spread = r.nsPerUnit.spread;
@@ -141,11 +159,13 @@ for (const key of keys) {
     if (spread > UNSTABLE) {
       unstable.push(`${r.id} (spread ${spread.toFixed(2)})`);
     }
-    let text = `${r.impl} ${fmtd}, ${bytes} B/op, spread ${spread.toFixed(2)}${flag}`;
+    let text = `${r.impl} ${fmtd}, ${bytes} B/op, spread ${spread.toFixed(2)}${flag}${discardNote}`;
     if (list.length === 1) {
       text += " [single impl, no comparison]";
     } else if (isBase) {
       text += " [baseline]";
+    } else if (usedOf(base) === 0) {
+      text += " -> no verdict (baseline: all processes discarded)";
     } else if (isDefect(r) || isDefect(base)) {
       text += " -> no verdict (zero or non-finite time)";
     } else {

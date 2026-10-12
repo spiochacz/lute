@@ -7,6 +7,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { New, EnableIncrementalDom2Md, DisableIncrementalDom2Md, IncrementalDom2MdStats } from "../../../src/index.ts";
+import { referenceEngine } from "../../incremental/reference_engine.ts";
 import type { Lute } from "../../../src/index.ts";
 import { auditDocuments, OPAQUE_DISAGREEMENTS_EXPECTED } from "../../incremental/corpus_docs.ts";
 
@@ -72,7 +73,7 @@ for (const c of CASES) {
   test(`regression: ${c.name}`, () => {
     for (const mode of ["wysiwyg", "ir"] as const) {
       const a = New();
-      const b = New();
+      const b = referenceEngine();
       EnableIncrementalDom2Md(a, { strict: true, verify: true });
       const want = outcome(() => run(b, mode, c.html));
       const got = outcome(() => run(a, mode, c.html));
@@ -93,7 +94,7 @@ for (const id of OPAQUE_DISAGREEMENTS_EXPECTED) {
   test(`opaque disagreement falls back as a whole: ${id}`, () => {
     const d = DOCS.find((x) => x.name === id)!;
     const a = New();
-    const b = New();
+    const b = referenceEngine();
     EnableIncrementalDom2Md(a, { strict: true, verify: true });
     const want = outcome(() => run(b, d.mode, d.html));
     const got = outcome(() => run(a, d.mode, d.html));
@@ -108,7 +109,7 @@ for (const id of OPAQUE_DISAGREEMENTS_EXPECTED) {
 
 test("disable then call: the normal path, identical output, no stats", () => {
   const a = New();
-  const b = New();
+  const b = referenceEngine();
   EnableIncrementalDom2Md(a, { strict: true });
   EnableIncrementalDom2Md(a, { strict: true });
   DisableIncrementalDom2Md(a);
@@ -118,7 +119,7 @@ test("disable then call: the normal path, identical output, no stats", () => {
 
 test("two engines with different options keep separate states", () => {
   const a = New();
-  const b = New();
+  const b = referenceEngine();
   const html = '<p data-block="0">a</p><ul data-tight="true" data-marker="*" data-block="0"><li data-marker="*">x</li></ul>';
   b.SetProtyleWYSIWYG(true);
   EnableIncrementalDom2Md(a, { strict: true, verify: true });
@@ -133,7 +134,7 @@ test("two engines with different options keep separate states", () => {
 
 test("the option toggle between two calls clears the cache (optionClears) and keeps the output equal", () => {
   const a = New();
-  const b = New();
+  const b = referenceEngine();
   const html = '<p data-block="0">a</p><ul data-tight="true" data-marker="*" data-block="0"><li data-marker="*">x</li></ul>';
   EnableIncrementalDom2Md(a, { strict: true, verify: true });
   assert.equal(a.VditorDOM2Md(html), b.VditorDOM2Md(html));
@@ -146,7 +147,7 @@ test("the option toggle between two calls clears the cache (optionClears) and ke
 
 test("a Terms change in place changes the fingerprint (the cache is cleared)", () => {
   const a = New();
-  const b = New();
+  const b = referenceEngine();
   const html = '<p data-block="0">a :smile: b</p>';
   EnableIncrementalDom2Md(a, { strict: true, verify: true });
   assert.equal(a.VditorDOM2Md(html), b.VditorDOM2Md(html));
@@ -160,7 +161,7 @@ test("a Terms change in place changes the fingerprint (the cache is cleared)", (
 
 test("a document larger than maxBytes falls back as too-large", () => {
   const a = New();
-  const b = New();
+  const b = referenceEngine();
   const big = "<p data-block=\"0\">" + "word ".repeat(2000) + "</p>";
   EnableIncrementalDom2Md(a, { strict: true, maxBytes: 1000 });
   assert.equal(a.VditorDOM2Md(big), b.VditorDOM2Md(big));

@@ -4,36 +4,59 @@
 // Usage (from ts/):
 //   npm run bench:macro -- [tag] [--rounds=N] [--methods=A,B] [--inputs=tiny,small,medium,spec]
 //                          [--warmup-ms=N] [--min-ms=N]
-//   tag defaults to "latest"; rounds 5; inputs "spec"; warm-up 1000 ms; min-ms 2000.
+//   tag defaults to "latest"; rounds 12; inputs "spec"; warm-up 300 ms; min-ms 700 ms.
 //   Writes bench/results/macro.<tag>.json (fresh each run). Builds dist/lute.min.js when it is missing.
 //   Quick run: npm run bench:macro -- quick --rounds=1 --methods=MarkdownStr --inputs=tiny,small --warmup-ms=200 --min-ms=300
+//   Smoke run: npm run bench:macro -- smoke --rounds=2 --methods=MarkdownStr,VditorDOM2Md --inputs=small,spec
 //
 // Inputs (bench/lib/inputs.ts): tiny (one paragraph, ~100 bytes), small (~1 KB, the
 // constant of bench/startup.ts), medium (the first ~10 KB of benchmark/commonmark-spec.md,
 // cut at a line), spec (the whole 212 KB file). Rows are keyed "method|input".
 //
+// Why the processes are short (read this before changing the defaults):
+// on this machine every process slows down 2.2 to 2.6 times about 2 to 3 seconds after it
+// starts sustained CPU work, even a pure arithmetic loop (tasks/004-incremental-and-fast-paths.md,
+// "Correction: the 2.5x slowdown of repeated 5 MB calls is the machine"). So
+// - never compare the first call against later calls inside one process;
+// - absolute times from processes that run longer than 2 s are inflated;
+// - each child must stay under about 1.5 s of CPU-busy time, and a child whose canary says it
+//   ran in the slow window is discarded (bench/lib/canary.ts).
+//
 // Design:
 // - Each measurement is a child process that loads ONE bundle, the same way as
 //   test/e2e/bundle_driver.mjs (the bundle sets globalThis.Lute), and times ONE method on
 //   one input, on the engine of bench/lib/methods.ts.
+// - Canary: the child times a fixed arithmetic loop right before its warm-up and right after
+//   its last timed batch (start and end canary, and their ratio, are in the result). The parent
+//   discards a process whose end/start ratio is above 1.3, or whose start canary is more than
+//   1.3 times the fastest start canary of the whole run. Discarded processes are kept in the
+//   JSON (flag "discarded", with the reason) and left out of the verdict.
+// - Budget: the child's CPU-busy time (load, warm-up, timed batches, and the output checks)
+//   should stay under about 1.5 s (CHILD_BUDGET_MS, measured from process start).
 // - Timing is in batches, so that the microsecond calls of tiny and small inputs are not
-//   drowned by the clock. The warm-up (warmup-ms) calibrates the number of calls per batch
-//   so that one batch lasts about 20 ms, and one unrecorded batch recalibrates it. The spec
-//   input always uses one call per batch. Timed batches run until there are at least 15
-//   batches AND min-ms have passed. Per process: min and median time per call, in
-//   microseconds, over the batches.
+//   drowned by the clock. The warm-up (warmup-ms, 300 ms by default) calibrates the number of
+//   calls per batch so that one batch lasts about 20 ms, and one unrecorded batch recalibrates it.
+//   The spec input always uses one call per batch.
+// - Batch rule: a child times at least 15 batches (PREFERRED_BATCHES) and at least min-ms (700 ms
+//   by default). If the estimate (the CPU time used so far plus max(15 batches, min-ms)) would
+//   exceed the budget, the child times at least 5 batches (FALLBACK_BATCHES) instead. The chosen
+//   number is printed in the JSON per child (minBatches). With the default warm-up, one spec call
+//   of 20-60 ms fits 15 batches; the slowest methods (up to 200 ms per call) get 5.
 // - The round-trip inputs (HTML2Md, BlockDOM2Md, SpinBlockDOM, VditorDOM2Md, SpinVditorDOM)
 //   are produced by the reference, in the parent, once per input. The parent never times
 //   anything. Both sides get the same input on stdin.
-// - Per method and input: `rounds` rounds, each round runs the port child and then the
+// - Per method and input: `rounds` rounds (12 by default), each round runs the port child and then the
 //   reference child (interleaved, so drift hits both alike).
 // - Output hash: sha256 (first 16 hex digits) of the first call's output after the ID and
 //   timestamp normalisation of test/e2e/helpers.ts (the same patterns, applied here because
-//   importing helpers.ts would load the port into the reference child). The output length is
-//   checked again after the timed batches.
-// - Verdict as in bench/lib/stats.ts: the fastest process per side (its median time per
-//   call), 20% threshold relative to the reference; spread = max / min over the processes of
-//   one side, flagged UNSTABLE above 1.5.
+//   importing helpers.ts would load the port into the reference child). Hashes use every process,
+//   discarded or not. The output length is checked again after the timed batches.
+// - Verdict as in bench/lib/stats.ts, over the processes that were not discarded: the fastest
+//   process per side (its median time per call), 20% threshold relative to the reference; spread
+//   = max / min over the kept processes of one side, flagged UNSTABLE above 1.5. The table has a
+//   "procs" column with the kept/run count per side. A side with no kept process gives no verdict.
+//   The run prints a warning line for every row where more than a third of its processes were
+//   discarded (printed at the end, when the run-wide fastest start canary is known).
 // - A method where both sides throw (or both lack it) is skipped and says so. If only one
 //   side throws or lacks it, the run fails.
 
@@ -56,16 +79,20 @@ import {
   type InputName,
 } from "./lib/inputs.ts";
 import { UNSTABLE, median, spreadOf, verdictFor } from "./lib/stats.ts";
+import { CANARY_ITERATIONS, CANARY_MAX_RATIO, canaryMs, canaryWarmUp, judgeCanaries, makeCanary, type Canary, type Judged } from "./lib/canary.ts";
 
 const BUILD_SCRIPT = fileURLToPath(new URL("../scripts/build.mjs", import.meta.url));
 const RESULTS_DIR = fileURLToPath(new URL("./results/", import.meta.url));
 const SELF = fileURLToPath(import.meta.url);
 
-const ROUNDS = 5;
-const WARMUP_MS = 1000;
-const MIN_MS = 2000;
-const MIN_BATCHES = 15;
+const ROUNDS = 12;
+const WARMUP_MS = 300;
+const MIN_MS = 700;
+const PREFERRED_BATCHES = 15;
+const FALLBACK_BATCHES = 5;
+const CHILD_BUDGET_MS = 1500;
 const BATCH_MS = 20;
+const DISCARD_SHARE = 1 / 3;
 
 type Side = "port" | "ref";
 
@@ -99,6 +126,7 @@ interface ChildOut {
   error: string;
   itersPerBatch: number;
   batches: number;
+  minBatches: number;
   calls: number;
   minUs: number;
   medianUs: number;
@@ -106,13 +134,20 @@ interface ChildOut {
   outputHash: string;
   outputLength: number;
   lengthsStable: boolean;
+  canary: Canary | null;
 }
 
 let sink = 0;
 
 // Calls of one method in batches. The warm-up calibrates the batch size; the spec input
-// always uses one call per batch.
-function timeBatches(call: () => string, singleCall: boolean, warmupMs: number, minMs: number): { itersPerBatch: number; timesUs: number[]; calls: number } {
+// always uses one call per batch. The number of timed batches follows the batch rule of the
+// header (15 if it fits the CPU budget, else 5).
+function timeBatches(
+  call: () => string,
+  singleCall: boolean,
+  warmupMs: number,
+  minMs: number,
+): { itersPerBatch: number; timesUs: number[]; calls: number; minBatches: number } {
   let n = 0;
   const w0 = performance.now();
   do {
@@ -132,9 +167,14 @@ function timeBatches(call: () => string, singleCall: boolean, warmupMs: number, 
     iters = Math.max(1, Math.round((iters * BATCH_MS) / Math.max(took, 1e-3)));
   }
 
+  // Batch rule: performance.now() counts from process start, so it is the CPU time used so far.
+  const batchMs = singleCall ? perCallMs : BATCH_MS;
+  const fits = performance.now() + Math.max(PREFERRED_BATCHES * batchMs, minMs) <= CHILD_BUDGET_MS;
+  const minBatches = fits ? PREFERRED_BATCHES : FALLBACK_BATCHES;
+
   const timesUs: number[] = [];
   const t0 = performance.now();
-  while (timesUs.length < MIN_BATCHES || performance.now() - t0 < minMs) {
+  while (timesUs.length < minBatches || performance.now() - t0 < minMs) {
     const s = performance.now();
     for (let i = 0; i < iters; i++) {
       sink += call().length;
@@ -142,7 +182,7 @@ function timeBatches(call: () => string, singleCall: boolean, warmupMs: number, 
     const e = performance.now();
     timesUs.push(((e - s) * 1000) / iters);
   }
-  return { itersPerBatch: iters, timesUs, calls: timesUs.length * iters };
+  return { itersPerBatch: iters, timesUs, calls: timesUs.length * iters, minBatches };
 }
 
 // Loads one bundle, times one method on one input, prints ROW_RESULT. The input comes on stdin.
@@ -161,6 +201,7 @@ function child(side: Side, methodName: string, inputName: string, warmupMs: numb
     error: "",
     itersPerBatch: 0,
     batches: 0,
+    minBatches: 0,
     calls: 0,
     minUs: 0,
     medianUs: 0,
@@ -168,6 +209,7 @@ function child(side: Side, methodName: string, inputName: string, warmupMs: numb
     outputHash: "",
     outputLength: 0,
     lengthsStable: true,
+    canary: null,
   };
   const lute = loadBundle(side === "port" ? PORT_BUNDLE : REF_BUNDLE) as LuteGlobal;
   const engine: Engine = makeEngine(lute, spec);
@@ -176,10 +218,15 @@ function child(side: Side, methodName: string, inputName: string, warmupMs: numb
   } else {
     try {
       const call = (): string => String(spec.call(engine, input));
+      canaryWarmUp();
       const first = call();
+      const startMs = canaryMs();
       const r = timeBatches(call, inputName === "spec", warmupMs, minMs);
+      const endMs = canaryMs();
+      out.canary = makeCanary(startMs, endMs);
       out.itersPerBatch = r.itersPerBatch;
       out.batches = r.timesUs.length;
+      out.minBatches = r.minBatches;
       out.calls = r.calls;
       out.timesUs = r.timesUs;
       out.minUs = Math.min(...r.timesUs);
@@ -209,9 +256,25 @@ function hashOf(s: string): string {
 
 // ---------------------------------------------------------------- parent mode
 
+// One process of one side. The discard flags are set by judgeCanaries, once the whole run is known.
+interface Proc extends Judged {
+  medianUs: number;
+  minUs: number;
+  itersPerBatch: number;
+  batches: number;
+  minBatches: number;
+  calls: number;
+  timesUs: number[];
+  outputHash: string;
+  outputLength: number;
+  lengthsStable: boolean;
+}
+
 interface Processes {
-  perProcess: { medianUs: number; minUs: number; itersPerBatch: number; batches: number; calls: number; timesUs: number[]; outputHash: string; outputLength: number; lengthsStable: boolean }[];
-  fastestUs: number;
+  run: number;
+  used: number; // processes not discarded
+  perProcess: Proc[];
+  fastestUs: number; // NaN when no process is used
   medianOfMediansUs: number;
   spread: number;
 }
@@ -255,24 +318,36 @@ function spawnChild(side: Side, method: string, inputName: string, input: string
   return JSON.parse(line.slice("ROW_RESULT ".length)) as ChildOut;
 }
 
-function summariseSide(list: ChildOut[]): Processes {
-  const medians = list.map((c) => c.medianUs);
+function procOf(c: ChildOut): Proc {
   return {
-    perProcess: list.map((c) => ({
-      medianUs: c.medianUs,
-      minUs: c.minUs,
-      itersPerBatch: c.itersPerBatch,
-      batches: c.batches,
-      calls: c.calls,
-      timesUs: c.timesUs,
-      outputHash: c.outputHash,
-      outputLength: c.outputLength,
-      lengthsStable: c.lengthsStable,
-    })),
-    fastestUs: Math.min(...medians),
-    medianOfMediansUs: median(medians),
-    spread: spreadOf(medians),
+    medianUs: c.medianUs,
+    minUs: c.minUs,
+    itersPerBatch: c.itersPerBatch,
+    batches: c.batches,
+    minBatches: c.minBatches,
+    calls: c.calls,
+    timesUs: c.timesUs,
+    outputHash: c.outputHash,
+    outputLength: c.outputLength,
+    lengthsStable: c.lengthsStable,
+    canary: c.canary,
+    discarded: false,
+    discardReason: null,
   };
+}
+
+function sideOf(list: ChildOut[]): Processes {
+  return { run: list.length, used: list.length, perProcess: list.map(procOf), fastestUs: NaN, medianOfMediansUs: NaN, spread: NaN };
+}
+
+// Summary of the processes that were not discarded.
+function summariseSide(side: Processes): void {
+  const kept = side.perProcess.filter((p) => !p.discarded);
+  const medians = kept.map((p) => p.medianUs);
+  side.used = kept.length;
+  side.fastestUs = kept.length === 0 ? NaN : Math.min(...medians);
+  side.medianOfMediansUs = kept.length === 0 ? NaN : median(medians);
+  side.spread = kept.length === 0 ? NaN : spreadOf(medians);
 }
 
 function measureMethod(spec: MethodSpec, inputName: InputName, input: string, rounds: number, opts: Opts): MethodResult {
@@ -308,35 +383,57 @@ function measureMethod(spec: MethodSpec, inputName: InputName, input: string, ro
     portRuns.push(p);
     refRuns.push(q);
   }
-  const port = summariseSide(portRuns);
-  const ref = summariseSide(refRuns);
   const portHashes = [...new Set(portRuns.map((c) => c.outputHash))];
   const refHashes = [...new Set(refRuns.map((c) => c.outputHash))];
-  const { ratio, verdict } = verdictFor(port.fastestUs, ref.fastestUs);
   return {
     ...base,
     status: "ok",
-    port,
-    ref,
-    ratio,
-    verdict,
+    port: sideOf(portRuns),
+    ref: sideOf(refRuns),
     hashesAgree: portHashes.length === 1 && refHashes.length === 1 && portHashes[0] === refHashes[0],
     portHashes,
     refHashes,
   };
 }
 
-// us per call, as ms from 1 ms up.
+// Judges every process of the run (the fastest start canary is run-wide), then summarises each
+// side over the processes that were not discarded. Called before every save and before the table.
+function finalize(results: MethodResult[]): void {
+  const ok = results.filter((r): r is MethodResult & { port: Processes; ref: Processes } => r.status === "ok" && r.port !== undefined && r.ref !== undefined);
+  const all = ok.flatMap((r) => [...r.port.perProcess, ...r.ref.perProcess]);
+  judgeCanaries(all);
+  for (const r of ok) {
+    summariseSide(r.port);
+    summariseSide(r.ref);
+    if (r.port.used === 0 || r.ref.used === 0) {
+      r.ratio = undefined;
+      r.verdict = "no verdict (all processes of one side discarded)";
+    } else {
+      const v = verdictFor(r.port.fastestUs, r.ref.fastestUs);
+      r.ratio = v.ratio;
+      r.verdict = v.verdict;
+    }
+  }
+}
+
+// us per call, as ms from 1 ms up. NaN (no kept process) prints as a dash.
 function fmtTime(us: number): string {
+  if (!Number.isFinite(us)) {
+    return "-";
+  }
   if (us >= 1000) {
     return `${(us / 1000).toFixed(us >= 100000 ? 1 : 2)} ms`;
   }
   return `${us.toFixed(us >= 100 ? 1 : 2)} µs`;
 }
 
+function fmtSpread(x: number): string {
+  return Number.isFinite(x) ? x.toFixed(2) : "-";
+}
+
 function printTable(results: MethodResult[]): void {
   console.log(
-    `\n${"method|input".padEnd(28)} ${"port fastest".padStart(12)}  ${"ref fastest".padStart(12)}  ${"verdict (port vs reference, same within 20%)".padEnd(46)}  spread port  spread ref  hashes`,
+    `\n${"method|input".padEnd(28)} ${"port fastest".padStart(12)}  ${"ref fastest".padStart(12)}  ${"verdict (port vs reference, same within 20%)".padEnd(46)}  spread port  spread ref  procs port  procs ref  hashes`,
   );
   for (const r of results) {
     if (r.status === "skipped") {
@@ -350,9 +447,28 @@ function printTable(results: MethodResult[]): void {
       .join(", ");
     console.log(
       `${r.key.padEnd(28)} ${fmtTime(p.fastestUs).padStart(12)}  ${fmtTime(q.fastestUs).padStart(12)}  ${(r.verdict ?? "").padEnd(46)}  ` +
-        `${p.spread.toFixed(2).padStart(11)}  ${q.spread.toFixed(2).padStart(10)}  ${r.hashesAgree ? "agree" : "DIFFER"}${flags ? "  " + flags : ""}`,
+        `${fmtSpread(p.spread).padStart(11)}  ${fmtSpread(q.spread).padStart(10)}  ${`${p.used}/${p.run}`.padStart(10)}  ${`${q.used}/${q.run}`.padStart(9)}  ` +
+        `${r.hashesAgree ? "agree" : "DIFFER"}${flags ? "  " + flags : ""}`,
     );
   }
+}
+
+// Rows where more than a third of the processes were discarded.
+function discardWarnings(results: MethodResult[]): string[] {
+  const out: string[] = [];
+  for (const r of results) {
+    if (r.status !== "ok" || r.port === undefined || r.ref === undefined) {
+      continue;
+    }
+    const total = r.port.run + r.ref.run;
+    const discarded = total - r.port.used - r.ref.used;
+    if (discarded > total * DISCARD_SHARE) {
+      out.push(
+        `WARNING ${r.key}: ${discarded} of ${total} processes discarded (port ${r.port.run - r.port.used}, reference ${r.ref.run - r.ref.used}); more than a third, the row is weak`,
+      );
+    }
+  }
+  return out;
 }
 
 function parent(): void {
@@ -394,6 +510,7 @@ function parent(): void {
   const results: MethodResult[] = [];
   const inputBytes: Record<string, number> = {};
   const save = (): void => {
+    finalize(results);
     writeFileSync(
       file,
       JSON.stringify(
@@ -403,7 +520,16 @@ function parent(): void {
           machine,
           bundles: { port: "ts/dist/lute.min.js", reference: "ts/test/oracle/lute.ref.min.cjs" },
           inputs: inputBytes,
-          timing: { warmupMs: opts.warmupMs, minBatches: MIN_BATCHES, batchMs: BATCH_MS, minMs: opts.minMs, unit: "us per call" },
+          timing: {
+            warmupMs: opts.warmupMs,
+            minMs: opts.minMs,
+            batchMs: BATCH_MS,
+            preferredBatches: PREFERRED_BATCHES,
+            fallbackBatches: FALLBACK_BATCHES,
+            childBudgetMs: CHILD_BUDGET_MS,
+            unit: "us per call",
+          },
+          canary: { iterations: CANARY_ITERATIONS, maxRatio: CANARY_MAX_RATIO, discardShare: DISCARD_SHARE },
           methods: results,
         },
         null,
@@ -426,9 +552,17 @@ function parent(): void {
       save();
     }
   }
+  finalize(results);
   printTable(results);
+  for (const w of discardWarnings(results)) {
+    console.log(w);
+  }
   const skipped = results.filter((r) => r.status === "skipped");
+  const procs = results.flatMap((r) => (r.status === "ok" && r.port !== undefined && r.ref !== undefined ? [...r.port.perProcess, ...r.ref.perProcess] : []));
+  const discarded = procs.filter((p) => p.discarded).length;
   console.log(`\n${results.length - skipped.length} compared, ${skipped.length} skipped (threw or missing on both sides).`);
+  console.log(`${discarded} of ${procs.length} processes discarded by the canary rule (excluded from the verdicts; kept in the JSON).`);
+  save();
   console.log(`wrote ${file}`);
 }
 

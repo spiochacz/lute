@@ -7,7 +7,6 @@
 
 import * as ast from "../ast/index.ts";
 import * as atom from "../html/atom/index.ts";
-import * as conv from "../runtime/conv.ts";
 import * as lex from "../lex/index.ts";
 import * as html from "../html/index.ts";
 import * as parse from "../parse/index.ts";
@@ -17,16 +16,13 @@ import type { RootOp } from "../render/recording_format_renderer.ts";
 import { registerFormatRendererFuncs } from "../render/format_renderer.ts";
 import { FormatRenderer } from "../render/types.ts";
 import type { Lute } from "../types.ts";
-import { vditorDOM2MdAdjustTree, vditorDOM2MdPreprocess, vditorDOM2MdRenderOptions } from "../vditor_wysiwyg.ts";
+import { ADJUST_VDITOR_DOM_PASSES, vditorDOM2MdAdjustTree, vditorDOM2MdPreprocess, vditorDOM2MdRenderOptions } from "../vditor_wysiwyg.ts";
 import { vditorIRDOM2MdAdjustTree, vditorIRDOM2MdPreprocess, vditorIRDOM2MdRenderOptions } from "../vditor_ir.ts";
 import type { Options as RenderOptions, RendererFunc } from "../render/renderer.ts";
 import { IncrementalInconsistency, BarrierViolation, contextKey } from "./piece.ts";
 import type { ChildInfo, Context, Mode, Refusal, Variant } from "./piece.ts";
 import { astStub, barrierStub, domStub } from "./barrier.ts";
 import { certify, bodyOf, parseWithBoundary } from "./parser_certificate.ts";
-
-// The fixed ID that SetTesting(true) gives every generated node ID (section 3.6, S15).
-export const GENERATED_ID = "20060102150405-1a2b3c4";
 
 export interface ModeAdapter {
   mode: Mode;
@@ -61,27 +57,8 @@ export const IR_ADAPTER: ModeAdapter = {
   renderOptions: (): RenderOptions => vditorIRDOM2MdRenderOptions(),
 };
 
-// The DOM passes of adjustVditorDOM (vditor_wysiwyg.ts), in the engine's order (section 3.2). scope "root" passes take the root (the body),
-// "child" passes take the child (the first child of the root; removeWbr is called with root.FirstChild as the engine does). The first
-// three passes run before the DOM neighbours are linked (phase analyse); passes 4 to 15 run with the links in place (phase build).
-export const ADJUST_PASSES: Array<{ name: string; scope: "root" | "child" }> = [
-  { name: "removeEmptyNodes", scope: "root" },
-  { name: "removeHighlightJSSpans", scope: "root" },
-  { name: "removeWbr", scope: "child" },
-  { name: "mergeVditorDOMList0", scope: "child" },
-  { name: "adjustVditorDOMListTight0", scope: "child" },
-  { name: "adjustVditorDOMListList", scope: "child" },
-  { name: "adjustVditorDOMListItemInP", scope: "child" },
-  { name: "removeCodeCode", scope: "child" },
-  { name: "adjustVditorDOMCodeA", scope: "child" },
-  { name: "adjustTag", scope: "child" },
-  { name: "mergeSameStrong", scope: "child" },
-  { name: "adjustTableCode", scope: "child" },
-  { name: "adjustMath", scope: "child" },
-  { name: "adjustNoscriptImg", scope: "child" },
-  { name: "adjustBlockInTable", scope: "child" },
-];
-
+// The DOM passes of the sandbox are the table ADJUST_VDITOR_DOM_PASSES of vditor_wysiwyg.ts (the one list that adjustVditorDOM runs too): the
+// passes whose phase is "analyse" run in analyse, the passes whose phase is "build" run in build, each on the child (a "root" pass on the root).
 // SandboxRenderer is the recording renderer of a sandbox run. Its Newline at the root writes nothing and does not read LastOut
 // (section 2.2): the replay decides the newline. A nested Newline reads LastOut, which is the entry value of the run (the key has it).
 export class SandboxRenderer extends RecordingFormatRenderer {
@@ -264,7 +241,6 @@ export interface Built {
   tipOpen: boolean; // tree.Context.Tip is not the root after genAST
 }
 
-export type Rendered = { variant: Variant } | { refusal: Refusal };
 
 // callPass calls one DOM pass of the engine by name on the given node, with the engine's own method.
 function callPass(lute: Lute, name: string, node: html.Node): void {
@@ -272,15 +248,24 @@ function callPass(lute: Lute, name: string, node: html.Node): void {
   f.call(lute, node);
 }
 
-// withTesting runs f with the testing flag of the node IDs on (section 3.6, S15), and restores the caller's flag, also on a throw.
-export function withTesting<T>(f: () => T): T {
-  const was = ast.GetTesting();
-  ast.SetTesting(true);
-  try {
-    return f();
-  } finally {
-    ast.SetTesting(was);
+// GeneratedNodeIDError is thrown by withoutNodeIDs when a phase created a node ID. classify maps it to the refusal generated-id.
+export class GeneratedNodeIDError extends Error {
+  constructor() {
+    super("a phase of the child created a node ID");
+    this.name = "GeneratedNodeIDError";
   }
+}
+
+// withoutNodeIDs runs one phase of a child (analyse, build or render) and throws GeneratedNodeIDError when the phase created a node ID, by
+// comparing ast.NewNodeIDCalls before and after. Such a child is refused: the ID of a fresh run is random, so the cache cannot reproduce it
+// (section 3.6). The check does not look at the output, so an ID that a pass sets and the output never shows also refuses the child.
+export function withoutNodeIDs<T>(f: () => T): T {
+  const before = ast.NewNodeIDCalls();
+  const v = f();
+  if (ast.NewNodeIDCalls() !== before) {
+    throw new GeneratedNodeIDError();
+  }
+  return v;
 }
 
 // coalesce merges adjacent Append operations with the same setsLastOut and drops empty ones (section 2.3).
@@ -308,6 +293,9 @@ export function coalesce(ops: RootOp[]): RootOp[] {
 // classify maps an exception of a phase to a refusal: a barrier violation or an inconsistency is an inconsistency, any other exception
 // is engine-threw (section 6).
 export function classify(e: unknown): Refusal {
+  if (e instanceof GeneratedNodeIDError) {
+    return { kind: "unsupported", reason: "generated-id" };
+  }
   if (e instanceof BarrierViolation) {
     return { kind: "inconsistency", reason: "barrier:" + e.site };
   }
@@ -340,19 +328,24 @@ export function analyse(lute: Lute, htmlStr: string, doCertify: boolean, opaque:
   const root: html.Node = body;
   const child: html.Node = body.FirstChild;
   const atomBefore = child.DataAtom;
-  callPass(lute, "removeEmptyNodes", root);
-  if (root.FirstChild === null) {
-    return { kind: "dead", atom: atomBefore };
-  }
-  callPass(lute, "removeHighlightJSSpans", root);
-  if (root.FirstChild !== null) {
-    callPass(lute, "removeWbr", root.FirstChild);
+  const passes = ADJUST_VDITOR_DOM_PASSES.filter((p) => p.phase === "analyse");
+  for (let i = 0; i < passes.length; i++) {
+    const pass = passes[i];
+    if (pass.scope === "root") {
+      callPass(lute, pass.name, root);
+    } else if (root.FirstChild !== null) {
+      callPass(lute, pass.name, root.FirstChild);
+    }
+    // the first analyse pass (removeEmptyNodes) leaves no top-level node when the child is empty: the child is dead
+    if (i === 0 && root.FirstChild === null) {
+      return { kind: "dead", atom: atomBefore };
+    }
   }
   return { kind: "alive", handle: { root, child, atomMerge: child.DataAtom, attrsMerge: child.Attr.length } };
 }
 
 // build is the second phase: the DOM neighbours are linked (plain assignments, milestone C C1), passes 4 to 15 run with the links in
-// place, then genAST of the child, the tip check and adjustTree. The caller runs it inside withTesting.
+// place, then genAST of the child, the tip check and adjustTree. The caller runs it under withoutNodeIDs.
 export function build(lute: Lute, adapter: ModeAdapter, h: Handle, dom: DomCtx): Built {
   const { root, child } = h;
   if (root.FirstChild !== child || child.PrevSibling !== null || child.NextSibling !== null) {
@@ -370,8 +363,10 @@ export function build(lute: Lute, adapter: ModeAdapter, h: Handle, dom: DomCtx):
   }
   const linkedFirst = root.FirstChild;
   const linkedLast = root.LastChild;
-  for (const pass of ADJUST_PASSES.slice(3)) {
-    callPass(lute, pass.name, child);
+  for (const pass of ADJUST_VDITOR_DOM_PASSES) {
+    if (pass.phase === "build") {
+      callPass(lute, pass.name, child);
+    }
   }
   if (root.FirstChild !== linkedFirst || root.LastChild !== linkedLast || child.PrevSibling !== prevStub || child.NextSibling !== nextStub) {
     throw new IncrementalInconsistency("sibling-structure-changed", "a DOM pass changed the top-level links");
@@ -396,8 +391,8 @@ export function build(lute: Lute, adapter: ModeAdapter, h: Handle, dom: DomCtx):
 }
 
 // render is the third phase: the AST neighbours are linked from prev and next (isFirst and isLast are prev < 0 and next < 0, invariant I1),
-// the recording renderer runs with LastOut = ctx.lastOut, and the root-writer log is coalesced. The caller runs it inside withTesting.
-export function render(lute: Lute, adapter: ModeAdapter, b: Built, ctx: Context, options: RenderOptions = adapter.renderOptions()): Rendered {
+// the recording renderer runs with LastOut = ctx.lastOut, and the root-writer log is coalesced. The caller runs it under withoutNodeIDs.
+export function render(lute: Lute, adapter: ModeAdapter, b: Built, ctx: Context, options: RenderOptions = adapter.renderOptions()): Variant {
   const { tree, tops } = b;
   if (tops.length > 0) {
     const first = tops[0];
@@ -423,48 +418,34 @@ export function render(lute: Lute, adapter: ModeAdapter, b: Built, ctx: Context,
   // no renderDocument exit: the document close is the assembly's job (3.4)
   const endLastOut = r.LastOut;
   const merged = coalesce(ops);
-  let text = "";
   let size = 96;
   for (const op of merged) {
-    if (op.kind === "Append") {
-      text += conv.StringFromBytes(op.bytes);
-      size += op.bytes.length + 64;
-    } else {
-      size += 64;
-    }
+    size += op.kind === "Append" ? op.bytes.length + 64 : 64;
   }
-  if (text.includes(GENERATED_ID)) {
-    return { refusal: { kind: "unsupported", reason: "generated-id" } };
-  }
-  return { variant: { key: contextKey(ctx), ops: merged, endLastOut, bytes: size } };
+  return { key: contextKey(ctx), ops: merged, endLastOut, bytes: size };
 }
 
 // runChild runs one child alone (section 3): analyse, build and render for one context. It never throws: a barrier violation or an
-// internal inconsistency is returned as an inconsistency refusal, any other exception as engine-threw. The testing flag is on for the
-// whole run (3.6).
+// internal inconsistency is returned as an inconsistency refusal, a node ID created by a phase as generated-id, any other exception as
+// engine-threw. Each phase runs under withoutNodeIDs (section 3.6).
 export function runChild(lute: Lute, adapter: ModeAdapter, htmlStr: string, ctx: Context, opts: RunOptions): RunResult {
-  return withTesting((): RunResult => {
-    try {
-      const a = analyse(lute, htmlStr, opts.certify, opts.opaque);
-      if (a.kind === "refused") {
-        return { info: null, variant: null, refusal: a.refusal };
-      }
-      if (a.kind === "dead") {
-        return { info: { alive: false, atom: a.atom, attrs: 0, topTypes: [] }, variant: null, refusal: null };
-      }
-      const b = build(lute, adapter, a.handle, ctx);
-      if (b.tipOpen) {
-        return { info: b.info, variant: null, refusal: { kind: "unsupported", reason: "tip-open" } };
-      }
-      const r = render(lute, adapter, b, ctx);
-      if ("refusal" in r) {
-        return { info: b.info, variant: null, refusal: r.refusal };
-      }
-      return { info: b.info, variant: r.variant, refusal: null };
-    } catch (e) {
-      return { info: null, variant: null, refusal: classify(e) };
+  try {
+    const a = withoutNodeIDs(() => analyse(lute, htmlStr, opts.certify, opts.opaque));
+    if (a.kind === "refused") {
+      return { info: null, variant: null, refusal: a.refusal };
     }
-  });
+    if (a.kind === "dead") {
+      return { info: { alive: false, atom: a.atom, attrs: 0, topTypes: [] }, variant: null, refusal: null };
+    }
+    const b = withoutNodeIDs(() => build(lute, adapter, a.handle, ctx));
+    if (b.tipOpen) {
+      return { info: b.info, variant: null, refusal: { kind: "unsupported", reason: "tip-open" } };
+    }
+    const variant = withoutNodeIDs(() => render(lute, adapter, b, ctx));
+    return { info: b.info, variant, refusal: null };
+  } catch (e) {
+    return { info: null, variant: null, refusal: classify(e) };
+  }
 }
 
 // listCoupling decides whether the engine's mergeVditorDOMList0 would merge two alive children (section 3.5): it runs the pass on a

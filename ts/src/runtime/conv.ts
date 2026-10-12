@@ -74,11 +74,9 @@ export function StringFromBytes(b: Uint8Array): string {
       }
     }
     if (ascii) {
-      let s = "";
-      for (let i = 0; i < n; i++) {
-        s += String.fromCharCode(b[i]);
-      }
-      return s;
+      // One flat string. Building it with `s += String.fromCharCode(b[i])` leaves a chain of cons-strings for every result of 13
+      // characters or more, which is kept alive with the string: 30 percent of the DOM tree of the CommonMark spec was such chains.
+      return String.fromCharCode.apply(null, b as unknown as number[]);
     }
   }
   // PORT-NOTE: perf, departs from Go's string(b) conversion (no Lute source line; runtime layer): one fatal TextDecoder

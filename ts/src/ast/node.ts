@@ -39,6 +39,13 @@ const emptyBytes: Uint8Array = new Uint8Array(0);
 //
 // PORT-NOTE: `Node` has all of Go's fields. Only Properties is an accessor (lazily created map); there is no hot/cold split.
 export class Node {
+  // PORT-NOTE: perf, departs from 1:1 (ast/node.go: one struct with every field): the object keeps the 17 fields that the parsers and
+  // renderers touch on most nodes (the tree links, Type, Tokens, ID, the three parsing flags, IsFencedCodeBlock, CodeBlockFenceLen,
+  // ListData, KramdownIAL, propertiesMap, HeadingLevel). The other 49 fields are `declare`d here and live in ext, an object created by the
+  // first write of a non-default value (or the first read of one of the three array fields); see the accessors at the end of this file.
+  // Readers and writers use the same names as in Go. Measured on the CommonMark spec: 815 -> 426 bytes per node, 17 percent of the nodes
+  // get an ext, every method 0 to 10 percent faster (tasks/001-analysis.md, "Hot/cold split of ast.Node").
+  ext: NodeExt | null;
   // Why this is a single struct and not an interface:
   // 1. Changing the node type is cheap: only the Type field changes
   // 2. Extensibility is traded for speed
@@ -46,9 +53,9 @@ export class Node {
   // Basic node structure
 
   ID: string; // Unique node identifier
-  Box: string; // Container (box)
-  Path: string; // Path
-  Spec: string; // Spec version number
+  declare Box: string; // Container (box)
+  declare Path: string; // Path
+  declare Spec: string; // Spec version number
 
   Type: NodeType; // Node type
   Parent: Node | null; // Parent node
@@ -56,10 +63,10 @@ export class Node {
   Next: Node | null; // Next sibling
   FirstChild: Node | null; // First child
   LastChild: Node | null; // Last child
-  Children: Node[]; // All child nodes
+  declare Children: Node[]; // All child nodes
   Tokens: Uint8Array | null; // Lexer tokens; the parser keeps operating on these tokens
-  TypeStr: string; // Type string
-  Data: string; // Tokens as a string
+  declare TypeStr: string; // Type string
+  declare Data: string; // Tokens as a string
 
   // Parsing flags
 
@@ -69,22 +76,22 @@ export class Node {
 
   // Code
 
-  CodeMarkerLen: number; // Number of backticks, 1 or 2
+  declare CodeMarkerLen: number; // Number of backticks, 1 or 2
 
   // Code block
 
   IsFencedCodeBlock: boolean;
-  CodeBlockFenceChar: number;
+  declare CodeBlockFenceChar: number;
 
   CodeBlockFenceLen: number;
-  CodeBlockFenceOffset: number;
-  CodeBlockOpenFence: Uint8Array;
-  CodeBlockInfo: Uint8Array;
-  CodeBlockCloseFence: Uint8Array | null;
+  declare CodeBlockFenceOffset: number;
+  declare CodeBlockOpenFence: Uint8Array;
+  declare CodeBlockInfo: Uint8Array;
+  declare CodeBlockCloseFence: Uint8Array | null;
 
   // HTML block
 
-  HtmlBlockType: number; // HTML block type defined by the spec (1-7)
+  declare HtmlBlockType: number; // HTML block type defined by the spec (1-7)
 
   // Lists and list items
 
@@ -92,41 +99,41 @@ export class Node {
 
   // Task list item [ ], [x] or [X]
 
-  TaskListItemChecked: boolean; // Whether checked
-  TaskListItemMarker: number; // Raw character inside the brackets: ' ', 'x', '-', '/', '>', '!', and so on
+  declare TaskListItemChecked: boolean; // Whether checked
+  declare TaskListItemMarker: number; // Raw character inside the brackets: ' ', 'x', '-', '/', '>', '!', and so on
 
   // Table
 
-  TableAligns: number[]; // Alignment of each table cell, left to right: 0 default, 1 left, 2 center, 3 right
-  TableCellAlign: number; // Table cell alignment
-  TableCellContentWidth: number; // Table cell content width (bytes)
-  TableCellContentMaxWidth: number; // Maximum table cell content width
-  TableCellRich: TableCellRich | null; // Rich text source of the cell; child nodes hold the inline projection
+  declare TableAligns: number[]; // Alignment of each table cell, left to right: 0 default, 1 left, 2 center, 3 right
+  declare TableCellAlign: number; // Table cell alignment
+  declare TableCellContentWidth: number; // Table cell content width (bytes)
+  declare TableCellContentMaxWidth: number; // Maximum table cell content width
+  declare TableCellRich: TableCellRich | null; // Rich text source of the cell; child nodes hold the inline projection
 
   // Link
 
-  LinkType: number; // Link type: 0 inline link [foo](/bar), 1 link reference definition [foo]: /bar, 2 autolink, 3 link reference [foo]
-  LinkRefLabel: Uint8Array; // Link reference label: [label] or [text][label]; for [label] the text and the label are the same
+  declare LinkType: number; // Link type: 0 inline link [foo](/bar), 1 link reference definition [foo]: /bar, 2 autolink, 3 link reference [foo]
+  declare LinkRefLabel: Uint8Array; // Link reference label: [label] or [text][label]; for [label] the text and the label are the same
 
   // Heading
 
   HeadingLevel: number; // 1 to 6
-  HeadingSetext: boolean; // Whether the heading is Setext
-  HeadingNormalizedID: string; // Normalized ID
+  declare HeadingSetext: boolean; // Whether the heading is Setext
+  declare HeadingNormalizedID: string; // Normalized ID
 
   // Math block
 
-  MathBlockDollarOffset: number;
+  declare MathBlockDollarOffset: number;
 
   // Footnotes
 
-  FootnotesRefLabel: Uint8Array; // Footnote reference label [^label]
-  FootnotesRefId: string; // Footnote ID
-  FootnotesRefs: Node[]; // Footnote references
+  declare FootnotesRefLabel: Uint8Array; // Footnote reference label [^label]
+  declare FootnotesRefId: string; // Footnote ID
+  declare FootnotesRefs: Node[]; // Footnote references
 
   // HTML entity
 
-  HtmlEntityTokens: Uint8Array; // Tokens of the entity as written in the input, for example &amp;
+  declare HtmlEntityTokens: Uint8Array; // Tokens of the entity as written in the input, for example &amp;
 
   // Attributes
 
@@ -136,106 +143,59 @@ export class Node {
 
   // Text mark
 
-  TextMarkType: string; // Text mark type
-  TextMarkAHref: string; // Text mark link data-href attribute
-  TextMarkATitle: string; // Text mark link data-title attribute
-  TextMarkInlineMathContent: string; // Text mark inline math content (data-content attribute)
-  TextMarkInlineMemoContent: string; // Text mark inline memo content (data-inline-memo-content attribute)
-  TextMarkBlockRefID: string; // Text mark block reference ID (data-id attribute)
-  TextMarkBlockRefSubtype: string; // Text mark block reference subtype, static or dynamic anchor text (data-subtype attribute)
-  TextMarkFileAnnotationRefID: string; // Text mark file annotation reference ID (data-id attribute)
-  TextMarkFlashcardOcclusionID: string; // Text mark flashcard occlusion ID (data-occlusion-id attribute)
-  TextMarkTextContent: string; // Text mark text content
+  declare TextMarkType: string; // Text mark type
+  declare TextMarkAHref: string; // Text mark link data-href attribute
+  declare TextMarkATitle: string; // Text mark link data-title attribute
+  declare TextMarkInlineMathContent: string; // Text mark inline math content (data-content attribute)
+  declare TextMarkInlineMemoContent: string; // Text mark inline memo content (data-inline-memo-content attribute)
+  declare TextMarkBlockRefID: string; // Text mark block reference ID (data-id attribute)
+  declare TextMarkBlockRefSubtype: string; // Text mark block reference subtype, static or dynamic anchor text (data-subtype attribute)
+  declare TextMarkFileAnnotationRefID: string; // Text mark file annotation reference ID (data-id attribute)
+  declare TextMarkFlashcardOcclusionID: string; // Text mark flashcard occlusion ID (data-occlusion-id attribute)
+  declare TextMarkTextContent: string; // Text mark text content
 
   // Attribute view https://github.com/siyuan-note/siyuan/issues/7535
 
-  AttributeViewID: string; // Attribute view ID (data-av-id attribute)
-  AttributeViewType: string; // Attribute view type (data-av-type attribute)
+  declare AttributeViewID: string; // Attribute view ID (data-av-id attribute)
+  declare AttributeViewType: string; // Attribute view type (data-av-type attribute)
 
   // Custom block https://github.com/siyuan-note/siyuan/issues/8418
 
-  CustomBlockFenceOffset: number; // Start offset of the custom block fence
-  CustomBlockInfo: string; // Custom block info
+  declare CustomBlockFenceOffset: number; // Start offset of the custom block fence
+  declare CustomBlockInfo: string; // Custom block info
 
   // Callout block https://github.com/88250/lute/issues/203 > [!Type] Title
-  CalloutType: string; // Callout type
-  CalloutTitle: string; // Callout title
-  CalloutTitleExplicit: boolean; // Whether the callout title is set explicitly
-  TabItemTitle: string; // Tab item title, kept as inline Markdown
-  CalloutIcon: string; // Callout icon
-  CalloutIconType: number; // Callout icon type: 0 Emoji Unicode, 1 custom icon
+  declare CalloutType: string; // Callout type
+  declare CalloutTitle: string; // Callout title
+  declare CalloutTitleExplicit: boolean; // Whether the callout title is set explicitly
+  declare TabItemTitle: string; // Tab item title, kept as inline Markdown
+  declare CalloutIcon: string; // Callout icon
+  declare CalloutIconType: number; // Callout icon type: 0 Emoji Unicode, 1 custom icon
 
   constructor(type: NodeType = 0, tokens: Uint8Array | null = null) {
     this.ID = "";
-    this.Box = "";
-    this.Path = "";
-    this.Spec = "";
     this.Type = type;
     this.Parent = null;
     this.Previous = null;
     this.Next = null;
     this.FirstChild = null;
     this.LastChild = null;
-    this.Children = [];
     this.Tokens = tokens;
-    this.TypeStr = "";
-    this.Data = "";
     this.Close = false;
     this.LastLineBlank = false;
     this.LastLineChecked = false;
-    this.CodeMarkerLen = 0;
     this.IsFencedCodeBlock = false;
-    this.CodeBlockFenceChar = 0;
     this.CodeBlockFenceLen = 0;
-    this.CodeBlockFenceOffset = 0;
     // PORT-NOTE: perf, departs from 1:1 (ast/node.go:Node constructor): the five byte fields below share emptyBytes instead of a new empty array each; no field is written through (see emptyBytes).
-    this.CodeBlockOpenFence = emptyBytes;
-    this.CodeBlockInfo = emptyBytes;
-    this.CodeBlockCloseFence = null;
-    this.HtmlBlockType = 0;
     this.ListData = null;
-    this.TaskListItemChecked = false;
-    this.TaskListItemMarker = 0;
-    this.TableAligns = [];
-    this.TableCellAlign = 0;
-    this.TableCellContentWidth = 0;
-    this.TableCellContentMaxWidth = 0;
-    this.TableCellRich = null;
-    this.LinkType = 0;
     // PORT-NOTE: perf, departs from 1:1 (ast/node.go:Node constructor): shared emptyBytes, see CodeBlockOpenFence.
-    this.LinkRefLabel = emptyBytes;
     this.HeadingLevel = 0;
-    this.HeadingSetext = false;
-    this.HeadingNormalizedID = "";
-    this.MathBlockDollarOffset = 0;
     // PORT-NOTE: perf, departs from 1:1 (ast/node.go:Node constructor): shared emptyBytes, see CodeBlockOpenFence.
-    this.FootnotesRefLabel = emptyBytes;
-    this.FootnotesRefId = "";
-    this.FootnotesRefs = [];
     // PORT-NOTE: perf, departs from 1:1 (ast/node.go:Node constructor): shared emptyBytes, see CodeBlockOpenFence.
-    this.HtmlEntityTokens = emptyBytes;
     this.KramdownIAL = null;
     this.propertiesMap = null;
-    this.TextMarkType = "";
-    this.TextMarkAHref = "";
-    this.TextMarkATitle = "";
-    this.TextMarkInlineMathContent = "";
-    this.TextMarkInlineMemoContent = "";
-    this.TextMarkBlockRefID = "";
-    this.TextMarkBlockRefSubtype = "";
-    this.TextMarkFileAnnotationRefID = "";
-    this.TextMarkFlashcardOcclusionID = "";
-    this.TextMarkTextContent = "";
-    this.AttributeViewID = "";
-    this.AttributeViewType = "";
-    this.CustomBlockFenceOffset = 0;
-    this.CustomBlockInfo = "";
-    this.CalloutType = "";
-    this.CalloutTitle = "";
-    this.CalloutTitleExplicit = false;
-    this.TabItemTitle = "";
-    this.CalloutIcon = "";
-    this.CalloutIconType = 0;
+
+    this.ext = null;
   }
 
   // PORT-NOTE: perf, departs from 1:1 (ast/node.go:123): Properties is an accessor over propertiesMap, and the map is created by the first read or write, so a node that never touches its attributes allocates none. Readers see an empty map, as in Go.
@@ -1774,3 +1734,111 @@ export const NodeMindmap = 600; // Mindmap container
 export const NodeMindmapItem = 601; // Mindmap node
 
 export const NodeTypeMaxVal = 1024; // Maximum node type value
+
+// The cold fields of Node (see the PORT-NOTE at Node.ext). newExt gives every field Go's zero value, exactly what the constructor
+// assigned before the split, so that all ext objects have one shape. Each accessor below answers Go's zero value while ext is null and
+// ignores a write of that zero value, so a node that never gets a non-default cold field never allocates an ext. The three array fields
+// (Children, TableAligns, FootnotesRefs) create the ext on first read, because callers push into the array they are given.
+interface NodeExt { [k: string]: any }
+function newExt(): NodeExt {
+  return {
+    Box: "",
+    Path: "",
+    Spec: "",
+    Children: [],
+    TypeStr: "",
+    Data: "",
+    CodeMarkerLen: 0,
+    CodeBlockFenceChar: 0,
+    CodeBlockFenceOffset: 0,
+    CodeBlockOpenFence: emptyBytes,
+    CodeBlockInfo: emptyBytes,
+    CodeBlockCloseFence: null,
+    HtmlBlockType: 0,
+    TaskListItemChecked: false,
+    TaskListItemMarker: 0,
+    TableAligns: [],
+    TableCellAlign: 0,
+    TableCellContentWidth: 0,
+    TableCellContentMaxWidth: 0,
+    TableCellRich: null,
+    LinkType: 0,
+    LinkRefLabel: emptyBytes,
+    HeadingSetext: false,
+    HeadingNormalizedID: "",
+    MathBlockDollarOffset: 0,
+    FootnotesRefLabel: emptyBytes,
+    FootnotesRefId: "",
+    FootnotesRefs: [],
+    HtmlEntityTokens: emptyBytes,
+    TextMarkType: "",
+    TextMarkAHref: "",
+    TextMarkATitle: "",
+    TextMarkInlineMathContent: "",
+    TextMarkInlineMemoContent: "",
+    TextMarkBlockRefID: "",
+    TextMarkBlockRefSubtype: "",
+    TextMarkFileAnnotationRefID: "",
+    TextMarkFlashcardOcclusionID: "",
+    TextMarkTextContent: "",
+    AttributeViewID: "",
+    AttributeViewType: "",
+    CustomBlockFenceOffset: 0,
+    CustomBlockInfo: "",
+    CalloutType: "",
+    CalloutTitle: "",
+    CalloutTitleExplicit: false,
+    TabItemTitle: "",
+    CalloutIcon: "",
+    CalloutIconType: 0,
+  };
+}
+Object.defineProperty(Node.prototype, "Box", { get(this: Node) { const e = this.ext; return e === null ? "" : e.Box; }, set(this: Node, v: any) { let e = this.ext; if (e === null) { if (v === "") { return; } e = this.ext = newExt(); } e.Box = v; }, enumerable: true, configurable: true });
+Object.defineProperty(Node.prototype, "Path", { get(this: Node) { const e = this.ext; return e === null ? "" : e.Path; }, set(this: Node, v: any) { let e = this.ext; if (e === null) { if (v === "") { return; } e = this.ext = newExt(); } e.Path = v; }, enumerable: true, configurable: true });
+Object.defineProperty(Node.prototype, "Spec", { get(this: Node) { const e = this.ext; return e === null ? "" : e.Spec; }, set(this: Node, v: any) { let e = this.ext; if (e === null) { if (v === "") { return; } e = this.ext = newExt(); } e.Spec = v; }, enumerable: true, configurable: true });
+Object.defineProperty(Node.prototype, "Children", { get(this: Node) { let e = this.ext; if (e === null) { e = this.ext = newExt(); } return e.Children; }, set(this: Node, v: any) { let e = this.ext; if (e === null) { e = this.ext = newExt(); } e.Children = v; }, enumerable: true, configurable: true });
+Object.defineProperty(Node.prototype, "TypeStr", { get(this: Node) { const e = this.ext; return e === null ? "" : e.TypeStr; }, set(this: Node, v: any) { let e = this.ext; if (e === null) { if (v === "") { return; } e = this.ext = newExt(); } e.TypeStr = v; }, enumerable: true, configurable: true });
+Object.defineProperty(Node.prototype, "Data", { get(this: Node) { const e = this.ext; return e === null ? "" : e.Data; }, set(this: Node, v: any) { let e = this.ext; if (e === null) { if (v === "") { return; } e = this.ext = newExt(); } e.Data = v; }, enumerable: true, configurable: true });
+Object.defineProperty(Node.prototype, "CodeMarkerLen", { get(this: Node) { const e = this.ext; return e === null ? 0 : e.CodeMarkerLen; }, set(this: Node, v: any) { let e = this.ext; if (e === null) { if (v === 0) { return; } e = this.ext = newExt(); } e.CodeMarkerLen = v; }, enumerable: true, configurable: true });
+Object.defineProperty(Node.prototype, "CodeBlockFenceChar", { get(this: Node) { const e = this.ext; return e === null ? 0 : e.CodeBlockFenceChar; }, set(this: Node, v: any) { let e = this.ext; if (e === null) { if (v === 0) { return; } e = this.ext = newExt(); } e.CodeBlockFenceChar = v; }, enumerable: true, configurable: true });
+Object.defineProperty(Node.prototype, "CodeBlockFenceOffset", { get(this: Node) { const e = this.ext; return e === null ? 0 : e.CodeBlockFenceOffset; }, set(this: Node, v: any) { let e = this.ext; if (e === null) { if (v === 0) { return; } e = this.ext = newExt(); } e.CodeBlockFenceOffset = v; }, enumerable: true, configurable: true });
+Object.defineProperty(Node.prototype, "CodeBlockOpenFence", { get(this: Node) { const e = this.ext; return e === null ? emptyBytes : e.CodeBlockOpenFence; }, set(this: Node, v: any) { let e = this.ext; if (e === null) { if (v === emptyBytes) { return; } e = this.ext = newExt(); } e.CodeBlockOpenFence = v; }, enumerable: true, configurable: true });
+Object.defineProperty(Node.prototype, "CodeBlockInfo", { get(this: Node) { const e = this.ext; return e === null ? emptyBytes : e.CodeBlockInfo; }, set(this: Node, v: any) { let e = this.ext; if (e === null) { if (v === emptyBytes) { return; } e = this.ext = newExt(); } e.CodeBlockInfo = v; }, enumerable: true, configurable: true });
+Object.defineProperty(Node.prototype, "CodeBlockCloseFence", { get(this: Node) { const e = this.ext; return e === null ? null : e.CodeBlockCloseFence; }, set(this: Node, v: any) { let e = this.ext; if (e === null) { if (v === null) { return; } e = this.ext = newExt(); } e.CodeBlockCloseFence = v; }, enumerable: true, configurable: true });
+Object.defineProperty(Node.prototype, "HtmlBlockType", { get(this: Node) { const e = this.ext; return e === null ? 0 : e.HtmlBlockType; }, set(this: Node, v: any) { let e = this.ext; if (e === null) { if (v === 0) { return; } e = this.ext = newExt(); } e.HtmlBlockType = v; }, enumerable: true, configurable: true });
+Object.defineProperty(Node.prototype, "TaskListItemChecked", { get(this: Node) { const e = this.ext; return e === null ? false : e.TaskListItemChecked; }, set(this: Node, v: any) { let e = this.ext; if (e === null) { if (v === false) { return; } e = this.ext = newExt(); } e.TaskListItemChecked = v; }, enumerable: true, configurable: true });
+Object.defineProperty(Node.prototype, "TaskListItemMarker", { get(this: Node) { const e = this.ext; return e === null ? 0 : e.TaskListItemMarker; }, set(this: Node, v: any) { let e = this.ext; if (e === null) { if (v === 0) { return; } e = this.ext = newExt(); } e.TaskListItemMarker = v; }, enumerable: true, configurable: true });
+Object.defineProperty(Node.prototype, "TableAligns", { get(this: Node) { let e = this.ext; if (e === null) { e = this.ext = newExt(); } return e.TableAligns; }, set(this: Node, v: any) { let e = this.ext; if (e === null) { e = this.ext = newExt(); } e.TableAligns = v; }, enumerable: true, configurable: true });
+Object.defineProperty(Node.prototype, "TableCellAlign", { get(this: Node) { const e = this.ext; return e === null ? 0 : e.TableCellAlign; }, set(this: Node, v: any) { let e = this.ext; if (e === null) { if (v === 0) { return; } e = this.ext = newExt(); } e.TableCellAlign = v; }, enumerable: true, configurable: true });
+Object.defineProperty(Node.prototype, "TableCellContentWidth", { get(this: Node) { const e = this.ext; return e === null ? 0 : e.TableCellContentWidth; }, set(this: Node, v: any) { let e = this.ext; if (e === null) { if (v === 0) { return; } e = this.ext = newExt(); } e.TableCellContentWidth = v; }, enumerable: true, configurable: true });
+Object.defineProperty(Node.prototype, "TableCellContentMaxWidth", { get(this: Node) { const e = this.ext; return e === null ? 0 : e.TableCellContentMaxWidth; }, set(this: Node, v: any) { let e = this.ext; if (e === null) { if (v === 0) { return; } e = this.ext = newExt(); } e.TableCellContentMaxWidth = v; }, enumerable: true, configurable: true });
+Object.defineProperty(Node.prototype, "TableCellRich", { get(this: Node) { const e = this.ext; return e === null ? null : e.TableCellRich; }, set(this: Node, v: any) { let e = this.ext; if (e === null) { if (v === null) { return; } e = this.ext = newExt(); } e.TableCellRich = v; }, enumerable: true, configurable: true });
+Object.defineProperty(Node.prototype, "LinkType", { get(this: Node) { const e = this.ext; return e === null ? 0 : e.LinkType; }, set(this: Node, v: any) { let e = this.ext; if (e === null) { if (v === 0) { return; } e = this.ext = newExt(); } e.LinkType = v; }, enumerable: true, configurable: true });
+Object.defineProperty(Node.prototype, "LinkRefLabel", { get(this: Node) { const e = this.ext; return e === null ? emptyBytes : e.LinkRefLabel; }, set(this: Node, v: any) { let e = this.ext; if (e === null) { if (v === emptyBytes) { return; } e = this.ext = newExt(); } e.LinkRefLabel = v; }, enumerable: true, configurable: true });
+Object.defineProperty(Node.prototype, "HeadingSetext", { get(this: Node) { const e = this.ext; return e === null ? false : e.HeadingSetext; }, set(this: Node, v: any) { let e = this.ext; if (e === null) { if (v === false) { return; } e = this.ext = newExt(); } e.HeadingSetext = v; }, enumerable: true, configurable: true });
+Object.defineProperty(Node.prototype, "HeadingNormalizedID", { get(this: Node) { const e = this.ext; return e === null ? "" : e.HeadingNormalizedID; }, set(this: Node, v: any) { let e = this.ext; if (e === null) { if (v === "") { return; } e = this.ext = newExt(); } e.HeadingNormalizedID = v; }, enumerable: true, configurable: true });
+Object.defineProperty(Node.prototype, "MathBlockDollarOffset", { get(this: Node) { const e = this.ext; return e === null ? 0 : e.MathBlockDollarOffset; }, set(this: Node, v: any) { let e = this.ext; if (e === null) { if (v === 0) { return; } e = this.ext = newExt(); } e.MathBlockDollarOffset = v; }, enumerable: true, configurable: true });
+Object.defineProperty(Node.prototype, "FootnotesRefLabel", { get(this: Node) { const e = this.ext; return e === null ? emptyBytes : e.FootnotesRefLabel; }, set(this: Node, v: any) { let e = this.ext; if (e === null) { if (v === emptyBytes) { return; } e = this.ext = newExt(); } e.FootnotesRefLabel = v; }, enumerable: true, configurable: true });
+Object.defineProperty(Node.prototype, "FootnotesRefId", { get(this: Node) { const e = this.ext; return e === null ? "" : e.FootnotesRefId; }, set(this: Node, v: any) { let e = this.ext; if (e === null) { if (v === "") { return; } e = this.ext = newExt(); } e.FootnotesRefId = v; }, enumerable: true, configurable: true });
+Object.defineProperty(Node.prototype, "FootnotesRefs", { get(this: Node) { let e = this.ext; if (e === null) { e = this.ext = newExt(); } return e.FootnotesRefs; }, set(this: Node, v: any) { let e = this.ext; if (e === null) { e = this.ext = newExt(); } e.FootnotesRefs = v; }, enumerable: true, configurable: true });
+Object.defineProperty(Node.prototype, "HtmlEntityTokens", { get(this: Node) { const e = this.ext; return e === null ? emptyBytes : e.HtmlEntityTokens; }, set(this: Node, v: any) { let e = this.ext; if (e === null) { if (v === emptyBytes) { return; } e = this.ext = newExt(); } e.HtmlEntityTokens = v; }, enumerable: true, configurable: true });
+Object.defineProperty(Node.prototype, "TextMarkType", { get(this: Node) { const e = this.ext; return e === null ? "" : e.TextMarkType; }, set(this: Node, v: any) { let e = this.ext; if (e === null) { if (v === "") { return; } e = this.ext = newExt(); } e.TextMarkType = v; }, enumerable: true, configurable: true });
+Object.defineProperty(Node.prototype, "TextMarkAHref", { get(this: Node) { const e = this.ext; return e === null ? "" : e.TextMarkAHref; }, set(this: Node, v: any) { let e = this.ext; if (e === null) { if (v === "") { return; } e = this.ext = newExt(); } e.TextMarkAHref = v; }, enumerable: true, configurable: true });
+Object.defineProperty(Node.prototype, "TextMarkATitle", { get(this: Node) { const e = this.ext; return e === null ? "" : e.TextMarkATitle; }, set(this: Node, v: any) { let e = this.ext; if (e === null) { if (v === "") { return; } e = this.ext = newExt(); } e.TextMarkATitle = v; }, enumerable: true, configurable: true });
+Object.defineProperty(Node.prototype, "TextMarkInlineMathContent", { get(this: Node) { const e = this.ext; return e === null ? "" : e.TextMarkInlineMathContent; }, set(this: Node, v: any) { let e = this.ext; if (e === null) { if (v === "") { return; } e = this.ext = newExt(); } e.TextMarkInlineMathContent = v; }, enumerable: true, configurable: true });
+Object.defineProperty(Node.prototype, "TextMarkInlineMemoContent", { get(this: Node) { const e = this.ext; return e === null ? "" : e.TextMarkInlineMemoContent; }, set(this: Node, v: any) { let e = this.ext; if (e === null) { if (v === "") { return; } e = this.ext = newExt(); } e.TextMarkInlineMemoContent = v; }, enumerable: true, configurable: true });
+Object.defineProperty(Node.prototype, "TextMarkBlockRefID", { get(this: Node) { const e = this.ext; return e === null ? "" : e.TextMarkBlockRefID; }, set(this: Node, v: any) { let e = this.ext; if (e === null) { if (v === "") { return; } e = this.ext = newExt(); } e.TextMarkBlockRefID = v; }, enumerable: true, configurable: true });
+Object.defineProperty(Node.prototype, "TextMarkBlockRefSubtype", { get(this: Node) { const e = this.ext; return e === null ? "" : e.TextMarkBlockRefSubtype; }, set(this: Node, v: any) { let e = this.ext; if (e === null) { if (v === "") { return; } e = this.ext = newExt(); } e.TextMarkBlockRefSubtype = v; }, enumerable: true, configurable: true });
+Object.defineProperty(Node.prototype, "TextMarkFileAnnotationRefID", { get(this: Node) { const e = this.ext; return e === null ? "" : e.TextMarkFileAnnotationRefID; }, set(this: Node, v: any) { let e = this.ext; if (e === null) { if (v === "") { return; } e = this.ext = newExt(); } e.TextMarkFileAnnotationRefID = v; }, enumerable: true, configurable: true });
+Object.defineProperty(Node.prototype, "TextMarkFlashcardOcclusionID", { get(this: Node) { const e = this.ext; return e === null ? "" : e.TextMarkFlashcardOcclusionID; }, set(this: Node, v: any) { let e = this.ext; if (e === null) { if (v === "") { return; } e = this.ext = newExt(); } e.TextMarkFlashcardOcclusionID = v; }, enumerable: true, configurable: true });
+Object.defineProperty(Node.prototype, "TextMarkTextContent", { get(this: Node) { const e = this.ext; return e === null ? "" : e.TextMarkTextContent; }, set(this: Node, v: any) { let e = this.ext; if (e === null) { if (v === "") { return; } e = this.ext = newExt(); } e.TextMarkTextContent = v; }, enumerable: true, configurable: true });
+Object.defineProperty(Node.prototype, "AttributeViewID", { get(this: Node) { const e = this.ext; return e === null ? "" : e.AttributeViewID; }, set(this: Node, v: any) { let e = this.ext; if (e === null) { if (v === "") { return; } e = this.ext = newExt(); } e.AttributeViewID = v; }, enumerable: true, configurable: true });
+Object.defineProperty(Node.prototype, "AttributeViewType", { get(this: Node) { const e = this.ext; return e === null ? "" : e.AttributeViewType; }, set(this: Node, v: any) { let e = this.ext; if (e === null) { if (v === "") { return; } e = this.ext = newExt(); } e.AttributeViewType = v; }, enumerable: true, configurable: true });
+Object.defineProperty(Node.prototype, "CustomBlockFenceOffset", { get(this: Node) { const e = this.ext; return e === null ? 0 : e.CustomBlockFenceOffset; }, set(this: Node, v: any) { let e = this.ext; if (e === null) { if (v === 0) { return; } e = this.ext = newExt(); } e.CustomBlockFenceOffset = v; }, enumerable: true, configurable: true });
+Object.defineProperty(Node.prototype, "CustomBlockInfo", { get(this: Node) { const e = this.ext; return e === null ? "" : e.CustomBlockInfo; }, set(this: Node, v: any) { let e = this.ext; if (e === null) { if (v === "") { return; } e = this.ext = newExt(); } e.CustomBlockInfo = v; }, enumerable: true, configurable: true });
+Object.defineProperty(Node.prototype, "CalloutType", { get(this: Node) { const e = this.ext; return e === null ? "" : e.CalloutType; }, set(this: Node, v: any) { let e = this.ext; if (e === null) { if (v === "") { return; } e = this.ext = newExt(); } e.CalloutType = v; }, enumerable: true, configurable: true });
+Object.defineProperty(Node.prototype, "CalloutTitle", { get(this: Node) { const e = this.ext; return e === null ? "" : e.CalloutTitle; }, set(this: Node, v: any) { let e = this.ext; if (e === null) { if (v === "") { return; } e = this.ext = newExt(); } e.CalloutTitle = v; }, enumerable: true, configurable: true });
+Object.defineProperty(Node.prototype, "CalloutTitleExplicit", { get(this: Node) { const e = this.ext; return e === null ? false : e.CalloutTitleExplicit; }, set(this: Node, v: any) { let e = this.ext; if (e === null) { if (v === false) { return; } e = this.ext = newExt(); } e.CalloutTitleExplicit = v; }, enumerable: true, configurable: true });
+Object.defineProperty(Node.prototype, "TabItemTitle", { get(this: Node) { const e = this.ext; return e === null ? "" : e.TabItemTitle; }, set(this: Node, v: any) { let e = this.ext; if (e === null) { if (v === "") { return; } e = this.ext = newExt(); } e.TabItemTitle = v; }, enumerable: true, configurable: true });
+Object.defineProperty(Node.prototype, "CalloutIcon", { get(this: Node) { const e = this.ext; return e === null ? "" : e.CalloutIcon; }, set(this: Node, v: any) { let e = this.ext; if (e === null) { if (v === "") { return; } e = this.ext = newExt(); } e.CalloutIcon = v; }, enumerable: true, configurable: true });
+Object.defineProperty(Node.prototype, "CalloutIconType", { get(this: Node) { const e = this.ext; return e === null ? 0 : e.CalloutIconType; }, set(this: Node, v: any) { let e = this.ext; if (e === null) { if (v === 0) { return; } e = this.ext = newExt(); } e.CalloutIconType = v; }, enumerable: true, configurable: true });

@@ -15,10 +15,11 @@ import * as util from "../util/index.ts";
 import { RecordingFormatRenderer } from "../render/recording_format_renderer.ts";
 import type { RootOp } from "../render/recording_format_renderer.ts";
 import { registerFormatRendererFuncs } from "../render/format_renderer.ts";
+import { FormatRenderer } from "../render/types.ts";
 import type { Lute } from "../types.ts";
 import { vditorDOM2MdAdjustTree, vditorDOM2MdPreprocess, vditorDOM2MdRenderOptions } from "../vditor_wysiwyg.ts";
 import { vditorIRDOM2MdAdjustTree, vditorIRDOM2MdPreprocess, vditorIRDOM2MdRenderOptions } from "../vditor_ir.ts";
-import type { Options as RenderOptions } from "../render/renderer.ts";
+import type { Options as RenderOptions, RendererFunc } from "../render/renderer.ts";
 import { IncrementalInconsistency, BarrierViolation, contextKey } from "./piece.ts";
 import type { ChildInfo, Context, Mode, Refusal, Variant } from "./piece.ts";
 import { astStub, barrierStub, domStub } from "./barrier.ts";
@@ -95,9 +96,136 @@ export class SandboxRenderer extends RecordingFormatRenderer {
   }
 }
 
+// The function table of a sandbox renderer (milestone C, step C4). registerFormatRendererFuncs binds 141 methods of one instance on every
+// construction, which is most of the renderer setup of a child. The table NodeType -> method name is derived ONCE from the registration
+// itself: the registration runs against a spy whose RendererFuncs records its set calls and whose renderX members return a bind that
+// records the name, so the mapping is the real one and never a copy. Each renderer instance then binds a method on its first use.
+interface MethodTable {
+  byType: Map<ast.NodeType, string>; // the table in registration order
+  names: string[]; // the same, indexed by NodeType (the lookup of every dispatch)
+}
+
+let methodTable: MethodTable | null = null;
+
+function methodTableOf(): MethodTable {
+  if (methodTable !== null) {
+    return methodTable;
+  }
+  const recorded = new Map<ast.NodeType, { method: string }>();
+  const spy = new Proxy({} as Record<string, unknown>, {
+    get(_t, prop): unknown {
+      if (prop === "RendererFuncs") {
+        return recorded;
+      }
+      const method = String(prop);
+      return { bind: (): { method: string } => ({ method }) };
+    },
+  });
+  registerFormatRendererFuncs(spy as unknown as FormatRenderer);
+  const table = new Map<ast.NodeType, string>();
+  for (const [type, m] of recorded) {
+    if (typeof (FormatRenderer.prototype as unknown as Record<string, unknown>)[m.method] !== "function") {
+      throw new Error("sandbox: the registration names a method that FormatRenderer does not have: " + m.method);
+    }
+    table.set(type, m.method);
+  }
+  const names: string[] = [];
+  for (const [type, name] of table) {
+    names[type] = name;
+  }
+  methodTable = { byType: table, names };
+  return methodTable;
+}
+
+// LazyRendererFuncs is the RendererFuncs of one sandbox renderer. get binds the method of the table on first use and keeps the function, so
+// the bound functions are the ones of the eager registration (one per type and instance). has, size and the iteration answer as the eager
+// map does: the iteration first fills the map in table order. Writes throw: the registration never runs on a sandbox renderer.
+class LazyRendererFuncs extends Map<ast.NodeType, RendererFunc> {
+  owner: object;
+  table: MethodTable;
+  slots: RendererFunc[]; // the functions bound so far, by NodeType (an array: get runs on every dispatch of a node)
+  filled: boolean;
+
+  constructor(owner: object, table: MethodTable) {
+    super();
+    this.owner = owner;
+    this.table = table;
+    this.slots = [];
+    this.filled = false;
+  }
+
+  get(type: ast.NodeType): RendererFunc | undefined {
+    const cached = this.slots[type];
+    if (cached !== undefined) {
+      return cached;
+    }
+    const name = this.table.names[type];
+    if (name === undefined) {
+      return undefined;
+    }
+    const f = (this.owner as Record<string, (...args: unknown[]) => unknown>)[name].bind(this.owner) as RendererFunc;
+    this.slots[type] = f;
+    return f;
+  }
+
+  has(type: ast.NodeType): boolean {
+    return this.table.names[type] !== undefined;
+  }
+
+  get size(): number {
+    return this.table.byType.size;
+  }
+
+  fill(): void {
+    if (!this.filled) {
+      this.filled = true;
+      for (const type of this.table.byType.keys()) {
+        super.set(type, this.get(type)!);
+      }
+    }
+  }
+
+  forEach(callback: (value: RendererFunc, key: ast.NodeType, map: Map<ast.NodeType, RendererFunc>) => void, thisArg?: unknown): void {
+    this.fill();
+    super.forEach(callback, thisArg);
+  }
+
+  entries(): MapIterator<[ast.NodeType, RendererFunc]> {
+    this.fill();
+    return super.entries();
+  }
+
+  keys(): MapIterator<ast.NodeType> {
+    this.fill();
+    return super.keys();
+  }
+
+  values(): MapIterator<RendererFunc> {
+    this.fill();
+    return super.values();
+  }
+
+  [Symbol.iterator](): MapIterator<[ast.NodeType, RendererFunc]> {
+    this.fill();
+    return super.entries();
+  }
+
+  set(): this {
+    throw new Error("sandbox renderer: the function table is not written");
+  }
+
+  delete(): boolean {
+    throw new Error("sandbox renderer: the function table is not written");
+  }
+
+  clear(): void {
+    throw new Error("sandbox renderer: the function table is not written");
+  }
+}
+
 export function newSandboxRenderer(tree: parse.Tree, options: RenderOptions, parseOptions: parse.Options): SandboxRenderer {
   const ret = new SandboxRenderer(tree, options, parseOptions);
-  registerFormatRendererFuncs(ret);
+  ret.RendererFuncs = new LazyRendererFuncs(ret, methodTableOf());
   return ret;
 }
 
@@ -269,7 +397,7 @@ export function build(lute: Lute, adapter: ModeAdapter, h: Handle, dom: DomCtx):
 
 // render is the third phase: the AST neighbours are linked from prev and next (isFirst and isLast are prev < 0 and next < 0, invariant I1),
 // the recording renderer runs with LastOut = ctx.lastOut, and the root-writer log is coalesced. The caller runs it inside withTesting.
-export function render(lute: Lute, adapter: ModeAdapter, b: Built, ctx: Context): Rendered {
+export function render(lute: Lute, adapter: ModeAdapter, b: Built, ctx: Context, options: RenderOptions = adapter.renderOptions()): Rendered {
   const { tree, tops } = b;
   if (tops.length > 0) {
     const first = tops[0];
@@ -283,7 +411,7 @@ export function render(lute: Lute, adapter: ModeAdapter, b: Built, ctx: Context)
       tree.Root!.LastChild = barrierStub("ast.root.LastChild") as ast.Node;
     }
   }
-  const r = newSandboxRenderer(tree, adapter.renderOptions(), lute.ParseOptions);
+  const r = newSandboxRenderer(tree, options, lute.ParseOptions);
   r.LastOut = ctx.lastOut;
   const ops: RootOp[] = [];
   r.renderDocument(tree.Root!, true);

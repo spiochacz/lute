@@ -310,7 +310,10 @@ export function tryDom2Md(st: State, lute: Lute, adapter: ModeAdapter, htmlIn: s
   }
 
   // 15: the replay on a FormatRenderer, child by child: a variant with the same key, or a render from the build, or a full run
-  const R = new FormatRenderer(new parse.Tree(), adapter.renderOptions(), lute.ParseOptions);
+  // One options object for all the renderers of this call. It is frozen, so that a renderer that wrote to it (none does today) would throw
+  // instead of leaking state from one child into the next.
+  const renderOptions = Object.freeze(adapter.renderOptions());
+  const R = new FormatRenderer(new parse.Tree(), renderOptions, lute.ParseOptions);
   R.LastOut = lex.ItemNewline;
   R.Writer = new bytes.Buffer();
   for (let i = 0; i < n; i++) {
@@ -338,7 +341,7 @@ export function tryDom2Md(st: State, lute: Lute, adapter: ModeAdapter, htmlIn: s
         // the render of the build of this call (the handle is used once)
         built.delete(e);
         stats.renders++;
-        const rr = phase(() => withTesting((): Rendered => render(lute, adapter, b.built, ctx)));
+        const rr = phase(() => withTesting((): Rendered => render(lute, adapter, b.built, ctx, renderOptions)));
         if (!rr.ok) {
           got = { kind: "refused", refusal: rr.refusal };
         } else if ("refusal" in rr.value) {

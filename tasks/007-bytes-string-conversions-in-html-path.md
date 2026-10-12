@@ -1,6 +1,6 @@
 # 007 — Bytes and string conversions on the HTML to Markdown path
 
-Status: **task, options recorded, nothing decided.** The owner asked on 2026-10-12 to write the options down and decide later. Related: `001-analysis.md` (profiles and measurement rules), `003-performance-plan.md` (item S3 names the same cost), `004-incremental-and-fast-paths.md` (the cache uses the same parser for new children).
+Status: **done (2026-10-12).** The owner accepted the recommendation of the analysis at the end of this file: R1, R2, R3 and the entity items E1 were implemented in optimisation wave 5 (commit `97c0fbd6`; results in `001-analysis.md`, "Optimisation wave 5"), and the departures manifest (`ts/DEPARTURES.md`) was added. Options A, C and D are rejected for the reasons given in the analysis. History of this file: the owner first asked to write the options down and decide later. Related: `001-analysis.md` (profiles and measurement rules), `003-performance-plan.md` (item S3 names the same cost), `004-incremental-and-fast-paths.md` (the cache uses the same parser for new children).
 
 ## Problem
 

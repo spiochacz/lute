@@ -693,6 +693,8 @@ Not started: L8 (`parseGFMAutoLink0` pre-scan), L11 (renderer method tables), S2
 
 ### Results after the go-ahead (2026-10-11, late; machine still partly busy)
 
+Superseded for the ratios by the short-process measurement of 2026-10-12, see "Final table, short-process measurement (2026-10-12)" at the end of this file.
+
 - **Correctness of everything in the waiting table:** `npm test` 3,971 tests, 3,963 pass, 8 skipped, 0 fail; `npm run test:full` the same counts in 11.7 minutes. S1 is accepted on correctness.
 - **Head against the state before wave 3** (interleaved, fastest of 5; 1 KB / 212 KB): `MarkdownStr` 1.23x / 1.33x, `FormatStr` 1.14x / 1.32x, `Md2VditorSVDOM` 1.20x / 3.04x, `Md2BlockDOM` 1.13x / 1.18x, `SpinBlockDOM` 1.24x / 1.25x, `BlockDOM2Md` 1.21x / 1.09x, `HTML2Md` 1.26x / 1.27x.
 - **By change** (from differences between checkpoints; anything under 20% is not resolved by this benchmark): L3 slim node about 13–18% on `MarkdownStr` and 10% on `HTML2Md` (confirmed); L1 SV container close `Md2VditorSVDOM` 117 → 45 ms (confirmed); L4 about 12% on `HTML2Md` spec (likely); L2 not resolved; S1 4–10%, positive in 13 of 14 rows but far below the 1.24x of the experiment because the pre-sizing sites stayed on the old path (not resolved; first candidate to revert if simplicity matters more); wave 4 together 0–7% (not resolved). Nothing was reverted: no change measured negative.
@@ -868,3 +870,173 @@ Reading: the control shows a bias or noise of about 3 percent in favour of the n
 **Benchmark tooling:** this run is also the first use of the short-process `bench:macro` (canary per child, 12 rounds, discarded processes reported). It works; about 10 percent of the processes were discarded, one row lost more than half.
 
 Tests: `npm test` 4,176 tests, 4,168 pass, 8 skipped, 0 fail (coordinator); `npm run test:full` 4,187 tests, 4,179 pass, 0 fail, and the cache fuzzer in both modes with 0 mismatches (agent).
+
+
+## searchEmptyNodes: where its self time goes (2026-10-12)
+
+Question: a CPU profile of `VditorDOM2Md` on the 212 KB CommonMark spec attributes about 3.9 percent of the call to `Lute.searchEmptyNodes` (pass `removeEmptyNodes`), 89 percent of it as self time. An earlier attempt (trim reorder, `atom.X` namespace reads) found nothing. All scratch code is in `ts/experiments/empty-nodes/` (no edit of `ts/src`). Input: `benchmark/commonmark-spec.md` through `Md2VditorDOM` (fixture by `dom2md-cache/cold-proto/mkfix.ts`, 518 KB), `vditorDOM2MdPreprocess`, `util.ParseHTML`.
+
+### Counts (`counts.ts`, `attrs.ts`, `maps.ts`)
+
+- Calls of `searchEmptyNodes`: 8889 (one root call; the function recurses, it is not called per top-level child). Maximum recursion depth 10. Array pushes into `emptyNodes`: 1 (one comment node). One hidden class for all 8889 nodes and one for all 8855 `Attribute` objects (`%HaveSameMap`); the `Attr` arrays have two maps (5214 of 8889 differ from the first): polymorphic, not megamorphic.
+- Atoms: Code 1930, Pre 1412, P 743, Div 706, A 117, Li 113, Em 75, H2 34, Strong 29, Ol 17, Ul 15, other small; text nodes (atom 0) 3674, Span 0.
+- Branches: `default` (the `class == "katex"` check, `DomAttrValue`) 5111; atom 0: 3139 take the "inline neighbour, keep" exit (29 of them do the strong-prev ZWSP trim), 534 are non-inline text nodes (the `TrimLeft`/`TrimRight`/`Contains`/`ReplaceAll` chain; text length p50 59, p90 155, max 579 chars, 42 208 chars in total), 15 are under Ol/Ul/Li (a `TrimRight`), 0 under a table; marks (Strong/Em/...) 104; second switch: 32 Ol/Ul reach `util.DomText` (22 226 chars in total).
+- Elements by attribute count: 0:28, 1:2993, 2:1430, 3:54, 4:710 (8855 attributes; key `class` 3509, `data-block` 1531, `data-marker` 1518, ...). The attribute keys are NOT internalized strings (`%DebugPrint`: `SEQ_ONE_BYTE_STRING_TYPE`; the literal `"class"` is `INTERNALIZED_ONE_BYTE_STRING_TYPE`).
+- Time per call (fresh parse untimed, timed call only, 8889 nodes): 1.1 to 1.4 ms in the "natural" state, 0.3 to 0.5 ms right after a minor GC, 0.17 to 0.3 ms when the same DOM is processed a third time. A plain recursive walk that reads only `DataAtom`/`FirstChild`/`NextSibling` costs 0.48 ms natural, 0.22 ms after a minor GC, 0.13 ms on its third pass.
+
+### Line-level profile (`prof_loop.ts`, `analyse_prof.ts`)
+
+`node --cpu-prof --cpu-prof-interval 100` on 6 s of "fresh parse + `lute.removeEmptyNodes`" (270 iterations, TS sources, default flags; one process, partly in the slowed state, so only the shares inside it mean something). `searchEmptyNodes` self = 6.2 percent of all samples (the parse dominates the loop). Of its self ticks:
+
+- 61 percent on lines `util/html.ts:398` and `:399` (`for (const attr of n.Attr)` / `if (attr.Key === attrName)`): this is `DomAttrValue` INLINED into `searchEmptyNodes` (positionTicks carry the callee's line numbers). Confirmed with `--max-inlined-bytecode-size=0`: `DomAttrValue` then shows as its own function (3.8 percent self against 2.1 percent for searchEmptyNodes), same total picture.
+- 23 percent on line 837 (`switch (n.DataAtom)`): the first load from the node `n` (a dependent-load miss lands on the first instruction that uses the value).
+- the rest (about 16 percent) is spread over about 25 lines, none above 3 percent (the recursive call 2.9, the katex line itself 0.9, isInline 0.7, the trims 0.2 each).
+
+So the self time is the inlined attribute lookup of the `default` branch (5111 calls, about 1.7 attribute objects each) plus the first read of every node.
+
+### Cause
+
+Memory locality of a freshly parsed DOM, not the shape of the code. Controlled experiment (`repeat_state.ts`; STATE=U: one minor GC before the parse and a 128 MB semi-space, so no scavenge between parse and call and the DOM lies interleaved with the tokenizer garbage; STATE=C: minor GC right after the parse, so the survivors are copied compactly; medians of 13 to 18 fresh DOMs; run k = k-th call on the same DOM; ms):
+
+| variant | U run1 | U run3 | C run1 | C run3 |
+|---|---|---|---|---|
+| copy a (verbatim) | 1.32 | 0.37 | 0.41 | 0.23 |
+| copy b (A/A) | 1.26 | 0.35 | 0.47 | 0.22 |
+| katex check removed (changes result, lower bound) | 0.78 | 0.27 | 0.35 | 0.16 |
+
+(one representative process per column; the other processes agree within the bias below.) One minor GC before the call turns 1.2 ms into 0.4 ms, a second one into 0.3 ms; the plain walk shows the same factor 2. Without forced GC the run time is bimodal (0.5 or 1.2 ms) depending on whether a scavenge happened to fall between the parse and the call, which is why profile shares and one-off timings of this function look unstable (an early v_early run showed a 40 percent "gain" in two of four processes that was pure GC phase; the controlled states removed it). The cost is not just "first touch of the spine": `removeHighlightJSSpans` run first on a fresh DOM costs 0.40 ms and `removeEmptyNodes` after it still 0.9 ms (`order.ts`). What `searchEmptyNodes` touches beyond the spine is the attribute chain (node -> `Attr` array -> elements -> `Attribute` -> `Key` string) and the text `Data` strings. The chain is worth about 0.45 ms of the 1.3 ms in state U (check removed: 0.8 ms) but only about 0.05 ms compacted or warm (0.16 against 0.21 to 0.23 ms).
+
+The mechanism inside the memory system (cache misses versus TLB misses) was not separated: no hardware counters on this machine.
+
+### Candidates
+
+1. `switch` shape (11 sparse atom cases, linear compare chain): REFUTED. `v_early.ts` tests the four most common default atoms (Code, Pre, P, Div) before the switch: U run1 1.37 against 1.32 (copy a) and 1.26 (copy b), inside the A/A bias.
+2. Megamorphic property access: REFUTED. One map for every `html.Node` and every `Attribute`; `Attr` arrays have two maps (polymorphic only).
+3. Recursion with a growing output array: REFUTED. 1 push; depth 10.
+4. String comparison against literals (non-internalized `Attribute.Key`): REFUTED as a cost. The keys are non-internalized, but pre-internalizing them (`v_intern.ts`, untimed prep) changes nothing in either state (U run1 1.28 against 1.34 and 1.24; C 0.47 against 0.47 and 0.46).
+5. `Array.prototype` iteration: REFUTED as a separate cause. The `for...of` over `Attr` is the inlined hot line, but its cost is the dependent loads (see Cause); the loop is optimized.
+6. Deoptimisation loops: REFUTED. `--trace-deopt`, 5 s, 270 iterations: 12 bailouts for this function (3 eager: insufficient type feedback, not a Smi, wrong map; 9 lazy), all during warm-up (Maglev, then Turbofan); the function ends compiled by TURBOFAN_JS and the last trace line is the Turbofan completion.
+7. Inlining attribution: CONFIRMED. 61 percent of the self ticks are the inlined `DomAttrValue`, which the profile reports as `searchEmptyNodes` self time. This also explains why the earlier attempts at lines of the function itself found nothing.
+8. `atom.X` namespace reads: refuted earlier; consistent (no atom read among the hot lines).
+9. Memory layout / cache misses of the freshly parsed DOM: CONFIRMED (minor-GC experiment, walk-only control, third-pass control).
+10. Trim and string operations (534 text nodes, 42 KB; 32 `DomText` over 22 KB): not a cause; together under 3 percent of the function's ticks.
+
+### Proposed change
+
+None. The only code-level lever is the katex check (`DomAttrValue(n, "class")` on 5111 elements). It has to read the attribute (any element may carry `class="katex"`), and its cost is the memory chain, not the comparison. Removing it changes the result; every variant that kept it (switch reorder, interned keys) measured equal to the A/A copy. The A/A bias of this harness is about 5 to 7 percent (copy a against copy b, run 1: 1.32/1.26, 1.33/1.40, 1.23/1.21, 1.34/1.24 in four processes of state U; 0.41/0.47, 0.50/0.49, 0.47/0.46 in state C). For the record, the verbatim scratch copy equals `removeEmptyNodes` byte for byte on the spec DOM (`identity.ts`: serialisations equal, 522 317 chars). The `corpus_docs.ts` identity check was not run, since there is no change to verify.
+
+### Is it worth changing
+
+No. 3.9 percent of the call is the ceiling; the inlined attribute lookup is about 60 percent of that, and only the part above what a compact heap would cost (roughly 0.45 of 1.3 ms in the bad-layout state, 0.05 of 0.4 ms in the compact state) is avoidable at all, and not by a change of this function. Even deleting the check would buy about 1.4 percent of the call in the bad-layout state and about 0.5 percent in the compact one. A lever with a real effect, if ever wanted: allocation locality of the parse (less tokenizer garbage between nodes, or a compacting copy of the DOM), which would speed up every pass, not only this one; that is a separate design item and is not proposed here.
+
+### Unknown
+
+- Cache versus TLB share of the miss cost (no hardware counters).
+- Why the second call on the same DOM is still slow in state U (0.9 to 1.1 ms) and only the third is fast (0.35 to 0.4 ms); candidates (write-barrier or string-representation effects of the first mutation) were not tested.
+- How often the real `VditorDOM2Md` loop of the original profile is in state U or C (depends on where scavenges fall); the 3.9 percent moves with GC timing.
+- The experiments ran the TS sources under Node 24; the original profile used the esbuild bundle. positionTicks line numbers refer to the sources.
+
+## Final table, short-process measurement (2026-10-12)
+
+Measured with the short-process benchmark (`bench/macro.ts`, read the header there), after the part A changes of 2026-10-12. The earlier table above was measured with 3-second processes, so its absolute times are inflated by the slowdown described in that tool's header; the old and new figures below are compared with that caveat.
+
+**Conditions**
+
+- **Code:** commit `97c0fbd6` (ts-port HEAD) plus the working tree of this run. The working tree has part A2 only: `vditorDOM2MdTree` in `src/vditor_wysiwyg.ts` and `vditorIRDOM2MdTree` in `src/vditor_ir.ts` (the DOM root is no longer kept during rendering, PORT-NOTE perf), and the regenerated `DEPARTURES.md`. Part A1 (no attribute array for attribute-less nodes) was measured and not applied: the shared frozen empty array saves a median of 0.11 MB of the 3.5 MB spec DOM (about 3 %), below the 5 % gate, so the code was never changed.
+- **Bundles:** `npm run build -- --no-types`, `dist/lute.min.js` 1,054,946 bytes. Reference: the default `test/oracle/lute.ref.min.cjs` (4,379,806 bytes).
+- **Tool defaults:** `npm run bench:macro -- final2 --inputs=tiny,small,medium,spec`, all 12 methods, 12 rounds, warm-up 300 ms, min-ms 700. Inputs: tiny about 100 bytes, small about 1 KB, medium about 10 KB, spec 212 KB (`benchmark/commonmark-spec.md`). Times are the fastest process per side; the factor is reference fastest divided by port fastest, from the verdict line (above 1: port faster).
+- **Discarded processes:** the full run discarded 363 of 1,152 processes (31.5 %) by the canary rule. 19 rows were reported weak (more than a third of their processes discarded). Each was re-run once with `--rounds=24`, one invocation per method, and the re-run replaces the full-run row. The re-runs used 912 processes, of which 247 were discarded (27 %). The table marks each row's source.
+- **Nothing else ran** on the machine during the measurements (only the tool's own child processes).
+- **Hashes:** all 48 rows agree (`hashes agree`).
+- **No verdict after the re-run:** `SpinBlockDOM|small` (all processes of both sides discarded) and `SpinBlockDOM|spec` (all 24 reference processes discarded; the port time is 130.1 ms and is not compared). Both are noisy on this machine and are reported without a ratio.
+- **Spread:** a row or side marked `UNSTABLE` has a spread between its kept processes above 1.5 (the tool's own flag, kept in the table).
+
+**Start-up** (`npm run bench:startup -- final2`, 15 rounds of port, reference, bare node and script-loaded, all children short: the port child 151 ms wall at best, the reference 313 ms):
+
+| metric | port fastest | port median | reference fastest | reference median | port/ref (fastest) | verdict |
+|---|---|---|---|---|---|---|
+| readMs | 2.36 | 2.88 | 7.27 | 8.51 | 0.32 | port 3.08x faster |
+| compileMs | 15.49 | 19.97 | 63.03 | 72.60 | 0.25 | port 4.07x faster |
+| runMs | 4.45 | 5.26 | 87.03 | 104.7 | 0.05 | port 19.57x faster |
+| newMs | 0.41 | 0.54 | 0.91 | 1.04 | 0.45 | port 2.21x faster |
+| firstCallMs | 8.28 | 10.02 | 15.71 | 18.76 | 0.53 | port 1.90x faster |
+| secondCallMs | 1.35 | 1.62 | 2.96 | 4.49 | 0.46 | port 2.19x faster |
+| totalMs | 31.95 | 39.00 | 178.5 | 205.8 | 0.18 | port 5.59x faster |
+| wallMs | 151.0 | 186.5 | 312.8 | 359.0 | 0.48 | port 2.07x faster |
+
+All times in milliseconds. Bare node (`node -e ""`): fastest 71.6 ms, median 88.8 ms. Script-loaded (this file, no bundle): fastest 114.1 ms, median 138.5 ms. Port wall above bare node: fastest 65.7 ms, median 96.5 ms; reference: 241.0 ms and 270.9 ms. The output lengths agree across the sides and the calls. Per-process spread: 1.19 to 2.66 (the port's `secondCallMs` is 2.66, the only metric above 1.5). The numbers are from short processes and are not flagged as indicative.
+
+**Comparison with the earlier table** (port time and factor, reference divided by port; the 12 `small` rows are the 1 KB input, the 12 `spec` rows the 212 KB input):
+
+| method | small, earlier | small, now | spec, earlier | spec, now |
+|---|---|---|---|---|
+| `MarkdownStr` | 175 µs (3.93x) | 155.9 µs (3.90x) | 23.0 ms (3.03x) | 18.12 ms (3.49x) |
+| `FormatStr` | 220 µs (3.53x) | 177.4 µs (3.65x) | 19.8 ms (2.81x) | 15.23 ms (2.92x) |
+| `Md2HTML` | 181 µs (3.88x) | 144.5 µs (3.94x) | 22.8 ms (3.02x) | 17.79 ms (3.18x) |
+| `Md2VditorDOM` | 217 µs (3.90x) | 175.9 µs (3.97x) | 31.5 ms (3.12x) | 25.79 ms (3.16x) |
+| `Md2VditorIRDOM` | 263 µs (4.12x) | 210.1 µs (4.23x) | 35.5 ms (3.69x) | 29.92 ms (3.56x) |
+| `Md2VditorSVDOM` | 407 µs (4.23x) | 277.8 µs (4.43x) | 43.4 ms (7.58x) | 35.31 ms (7.68x) |
+| `Md2BlockDOM` | 313 µs (5.26x) | 242.5 µs (5.77x) | 41.1 ms (3.92x) | 36.15 ms (4.15x) |
+| `SpinVditorDOM` | 558 µs (3.82x) | 423.4 µs (4.13x) | 66.9 ms (4.68x) | 49.59 ms (4.31x) |
+| `VditorDOM2Md` | 277 µs (4.01x) | 214.0 µs (4.58x) | 38.5 ms (5.64x) | 22.77 ms (6.22x) |
+| `SpinBlockDOM` | 1.81 ms (3.49x) | no verdict (full run 1.54 ms, 3.48x) | 172.0 ms (4.22x) | no verdict (130.1 ms; full run 133.3 ms) |
+| `BlockDOM2Md` | 738 µs (3.41x) | 535.6 µs (3.92x) | 78.1 ms (5.29x) | 53.56 ms (5.98x) |
+| `HTML2Md` | 374 µs (4.84x) | 263.3 µs (5.52x) | 37.2 ms (9.06x) | 26.41 ms (11.42x) |
+
+Every row with a verdict is faster on the port in both tables. Both sides moved between the two runs (the earlier figures come from 3-second processes), so the factors are the comparable quantity: they are higher than before in 19 of the 22 rows that have a verdict in both tables (lower: `MarkdownStr` small, `Md2VditorIRDOM` spec, `SpinVditorDOM` spec).
+
+**Final table** (48 rows; source: `full run` = the first run of this table, `re-run` = the 24-round run that replaces a weak row):
+
+| Method | Input | Port (fastest) | Reference (fastest) | Factor ref/port | Hashes | Processes kept, port | Processes kept, reference | Source | Note |
+|---|---|---|---|---|---|---|---|---|---|
+| MarkdownStr | tiny | 29.89 µs | 104.4 µs | 3.49x | agree | 9/12 | 10/12 | full run |  |
+| FormatStr | tiny | 31.82 µs | 109.8 µs | 3.45x | agree | 9/12 | 9/12 | full run |  |
+| Md2HTML | tiny | 30.98 µs | 101.7 µs | 3.28x | agree | 10/12 | 10/12 | full run |  |
+| Md2VditorDOM | tiny | 33.00 µs | 114.7 µs | 3.47x | agree | 11/12 | 7/12 | full run |  |
+| Md2VditorIRDOM | tiny | 41.81 µs | 161.8 µs | 3.87x | agree | 12/12 | 11/12 | full run |  |
+| Md2VditorSVDOM | tiny | 59.83 µs | 279.0 µs | 4.66x | agree | 12/12 | 11/12 | full run |  |
+| Md2BlockDOM | tiny | 37.66 µs | 157.4 µs | 4.18x | agree | 11/12 | 11/12 | full run | port UNSTABLE |
+| SpinVditorDOM | tiny | 61.59 µs | 238.9 µs | 3.88x | agree | 12/12 | 12/12 | full run |  |
+| VditorDOM2Md | tiny | 29.03 µs | 116.2 µs | 4.00x | agree | 10/12 | 11/12 | full run |  |
+| SpinBlockDOM | tiny | 176.2 µs | 618.1 µs | 3.51x | agree | 4/24 | 4/24 | re-run (24 rounds) |  |
+| BlockDOM2Md | tiny | 42.53 µs | 173.0 µs | 4.07x | agree | 15/24 | 20/24 | re-run (24 rounds) | ref UNSTABLE |
+| HTML2Md | tiny | 31.80 µs | 150.0 µs | 4.72x | agree | 24/24 | 23/24 | re-run (24 rounds) |  |
+| MarkdownStr | small | 155.9 µs | 608.4 µs | 3.90x | agree | 10/12 | 9/12 | full run |  |
+| FormatStr | small | 177.4 µs | 647.4 µs | 3.65x | agree | 11/12 | 8/12 | full run |  |
+| Md2HTML | small | 144.5 µs | 570.0 µs | 3.94x | agree | 10/12 | 11/12 | full run |  |
+| Md2VditorDOM | small | 175.9 µs | 698.3 µs | 3.97x | agree | 11/12 | 10/12 | full run |  |
+| Md2VditorIRDOM | small | 210.1 µs | 889.5 µs | 4.23x | agree | 12/12 | 10/12 | full run |  |
+| Md2VditorSVDOM | small | 277.8 µs | 1.23 ms | 4.44x | agree | 20/24 | 16/24 | re-run (24 rounds) |  |
+| Md2BlockDOM | small | 242.5 µs | 1.40 ms | 5.79x | agree | 22/24 | 23/24 | re-run (24 rounds) |  |
+| SpinVditorDOM | small | 423.4 µs | 1.75 ms | 4.13x | agree | 17/24 | 19/24 | re-run (24 rounds) |  |
+| VditorDOM2Md | small | 214.0 µs | 979.3 µs | 4.58x | agree | 19/24 | 17/24 | re-run (24 rounds) |  |
+| SpinBlockDOM | small | - | - | n/a | agree | 0/24 | 0/24 | re-run (24 rounds) | no verdict: all processes discarded on both sides |
+| BlockDOM2Md | small | 535.6 µs | 2.10 ms | 3.93x | agree | 11/12 | 12/12 | full run |  |
+| HTML2Md | small | 263.3 µs | 1.45 ms | 5.52x | agree | 12/12 | 9/12 | full run |  |
+| MarkdownStr | medium | 919.5 µs | 2.89 ms | 3.14x | agree | 11/12 | 11/12 | full run |  |
+| FormatStr | medium | 927.8 µs | 2.90 ms | 3.13x | agree | 12/12 | 11/12 | full run |  |
+| Md2HTML | medium | 919.5 µs | 2.81 ms | 3.06x | agree | 11/12 | 11/12 | full run |  |
+| Md2VditorDOM | medium | 1.20 ms | 3.54 ms | 2.95x | agree | 9/12 | 7/12 | full run |  |
+| Md2VditorIRDOM | medium | 1.47 ms | 5.11 ms | 3.48x | agree | 21/24 | 23/24 | re-run (24 rounds) | ref UNSTABLE |
+| Md2VditorSVDOM | medium | 2.07 ms | 9.16 ms | 4.42x | agree | 8/12 | 9/12 | full run |  |
+| Md2BlockDOM | medium | 1.52 ms | 6.16 ms | 4.04x | agree | 22/24 | 22/24 | re-run (24 rounds) |  |
+| SpinVditorDOM | medium | 2.04 ms | 7.12 ms | 3.50x | agree | 21/24 | 17/24 | re-run (24 rounds) |  |
+| VditorDOM2Md | medium | 801.3 µs | 3.46 ms | 4.32x | agree | 11/12 | 9/12 | full run |  |
+| SpinBlockDOM | medium | 5.80 ms | 17.54 ms | 3.03x | agree | 12/12 | 10/12 | full run |  |
+| BlockDOM2Md | medium | 1.91 ms | 7.24 ms | 3.78x | agree | 22/24 | 16/24 | re-run (24 rounds) |  |
+| HTML2Md | medium | 1.18 ms | 5.63 ms | 4.75x | agree | 22/24 | 23/24 | re-run (24 rounds) |  |
+| MarkdownStr | spec | 18.12 ms | 63.15 ms | 3.48x | agree | 24/24 | 19/24 | re-run (24 rounds) |  |
+| FormatStr | spec | 15.23 ms | 44.40 ms | 2.92x | agree | 10/12 | 9/12 | full run |  |
+| Md2HTML | spec | 17.79 ms | 56.65 ms | 3.18x | agree | 11/12 | 6/12 | full run |  |
+| Md2VditorDOM | spec | 25.79 ms | 81.46 ms | 3.16x | agree | 8/12 | 8/12 | full run |  |
+| Md2VditorIRDOM | spec | 29.92 ms | 106.4 ms | 3.56x | agree | 10/12 | 12/12 | full run |  |
+| Md2VditorSVDOM | spec | 35.31 ms | 271.2 ms | 7.68x | agree | 11/12 | 9/12 | full run |  |
+| Md2BlockDOM | spec | 36.15 ms | 150.1 ms | 4.15x | agree | 23/24 | 20/24 | re-run (24 rounds) |  |
+| SpinVditorDOM | spec | 49.59 ms | 213.7 ms | 4.31x | agree | 15/24 | 9/24 | re-run (24 rounds) |  |
+| VditorDOM2Md | spec | 22.77 ms | 141.6 ms | 6.22x | agree | 9/12 | 7/12 | full run |  |
+| SpinBlockDOM | spec | 130.1 ms | - | n/a | agree | 20/24 | 0/24 | re-run (24 rounds) | no verdict: reference side all discarded |
+| BlockDOM2Md | spec | 53.56 ms | 320.1 ms | 5.98x | agree | 23/24 | 16/24 | re-run (24 rounds) |  |
+| HTML2Md | spec | 26.41 ms | 301.6 ms | 11.42x | agree | 21/24 | 23/24 | re-run (24 rounds) |  |
+
+
+The ratios of this table are the ones to use for comparisons; the absolute times depend on the state of the machine at the moment of each process.

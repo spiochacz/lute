@@ -228,14 +228,24 @@ export function vditorIRDOM2MdRender(lute: Lute, tree: parse.Tree): Uint8Array {
   return renderer.Render();
 }
 
+// vditorIRDOM2MdTree runs the first two stages of vditorIRDOM2Md (prepare and build tree) and returns the Markdown tree only, or null where
+// vditorIRDOM2Md returns its empty result before any rendering.
+// PORT-NOTE: perf, departs from vditor_ir.go:vditorIRDOM2Md: the DOM root is not kept in a local of the method during the render stage, see vditorDOM2MdTree in vditor_wysiwyg.ts.
+export function vditorIRDOM2MdTree(lute: Lute, htmlStr: string): parse.Tree | null {
+  const htmlRoot = vditorIRDOM2MdPrepare(lute, htmlStr);
+  if (null === htmlRoot) {
+    return null;
+  }
+  return vditorIRDOM2MdBuildTree(lute, htmlRoot);
+}
+
 Lute.prototype.vditorIRDOM2Md = function (this: Lute, htmlStr: string): string {
   const lute = this;
   let markdown = "";
-  const htmlRoot = vditorIRDOM2MdPrepare(lute, htmlStr);
-  if (null === htmlRoot) {
+  const tree = vditorIRDOM2MdTree(lute, htmlStr);
+  if (null === tree) {
     return markdown;
   }
-  const tree = vditorIRDOM2MdBuildTree(lute, htmlRoot);
   // Render the AST with the Markdown formatter
   const formatted = vditorIRDOM2MdRender(lute, tree);
   markdown = conv.StringFromBytes(formatted);

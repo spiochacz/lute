@@ -354,14 +354,27 @@ export function vditorDOM2MdRender(lute: Lute, tree: parse.Tree): Uint8Array {
   return renderer.Render();
 }
 
+// vditorDOM2MdTree runs the first two stages of vditorDOM2Md (prepare and build tree) and returns the Markdown tree only, or null where
+// vditorDOM2Md returns its empty result before any rendering.
+// PORT-NOTE: perf, departs from vditor_wysiwyg.go:vditorDOM2Md: Go keeps the DOM root in a local of vditorDOM2Md until the end, and so does the
+// port when the two stages are called from the method itself. The root then stays reachable during the render stage (about 2.9 MB of live heap on the
+// CommonMark spec, measured with a probe in the first text node of the render). This helper's frame is gone before rendering starts, so the DOM
+// can be collected. The output is the same.
+export function vditorDOM2MdTree(lute: Lute, htmlStr: string): parse.Tree | null {
+  const htmlRoot = vditorDOM2MdPrepare(lute, htmlStr);
+  if (null === htmlRoot) {
+    return null;
+  }
+  return vditorDOM2MdBuildTree(lute, htmlRoot);
+}
+
 Lute.prototype.vditorDOM2Md = function (this: Lute, htmlStr: string): string {
   const lute = this;
   let markdown = "";
-  const htmlRoot = vditorDOM2MdPrepare(lute, htmlStr);
-  if (null === htmlRoot) {
+  const tree = vditorDOM2MdTree(lute, htmlStr);
+  if (null === tree) {
     return markdown;
   }
-  const tree = vditorDOM2MdBuildTree(lute, htmlRoot);
   // Render the AST as formatted Markdown
   const formatted = vditorDOM2MdRender(lute, tree);
   markdown = conv.StringFromBytes(formatted);

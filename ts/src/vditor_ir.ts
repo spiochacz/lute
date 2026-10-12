@@ -26,6 +26,7 @@ import * as parse from "./parse/index.ts";
 import * as render from "./render/index.ts";
 import * as util from "./util/index.ts";
 import { Lute } from "./types.ts";
+import { normalizeTrailingWhitespace } from "./vditor_wysiwyg.ts";
 // PORT-NOTE: hook for the per-child cache (tasks/004), no behaviour change: the only import of src/incremental/.
 import { incrementalActive, incrementalAuto, tryIncrementalDom2Md } from "./incremental/dispatch.ts";
 
@@ -133,8 +134,9 @@ export function vditorIRDOM2MdPreprocess(htmlStr: string): string {
   htmlStr = strings.ReplaceAll(htmlStr, "<wbr>", "");
 
   // Replace trailing whitespace, otherwise the HTML parsing produces redundant nodes that lead to empty code blocks
-  htmlStr = strings.ReplaceAll(htmlStr, "\t\n", "\n");
-  htmlStr = strings.ReplaceAll(htmlStr, "    \n", "  \n");
+  // PORT-NOTE: perf, departs from vditor_ir.go:vditorIRDOM2MdPreprocess: the same single pass as vditorDOM2MdPreprocess
+  // (normalizeTrailingWhitespace in vditor_wysiwyg.ts), which gives the result of the two strings.ReplaceAll calls it replaces.
+  htmlStr = normalizeTrailingWhitespace(htmlStr);
   return htmlStr;
 }
 

@@ -212,6 +212,48 @@ Lute.prototype.HTML2Md = function (this: Lute, htmlStr: string): string {
   return markdown;
 };
 
+// normalizeTrailingWhitespace is the two replacements of vditorDOM2MdPreprocess after the caret is removed, in their order:
+// strings.ReplaceAll(s, "\t\n", "\n") and then strings.ReplaceAll(s, "    \n", "  \n"). It makes them in one pass over the
+// line feeds. Every match of either pattern ends with a line feed and contains no other one, and the four spaces of a
+// match are not part of another match, so the matches are the line feeds that have a tab directly before them (the tab is
+// dropped) and the line feeds that have four spaces before them, in the tab-stripped text (the four spaces become two).
+// A tab that stands before the four spaces is not one of them: "    \t\n" becomes "  \n" in both forms. The randomised
+// test in vditor_preprocess.test.ts checks this against the two calls on 100,000 generated strings.
+// PORT-NOTE: perf, departs from vditor_wysiwyg.go:vditorDOM2MdPreprocess: the two passes of strings.ReplaceAll each search
+// the whole document (for the four-space pattern V8's search alone costs about 0.4 ms on the CommonMark spec DOM, and the
+// result is built from 21 pieces). This pass visits the line feeds only and returns the input when there is nothing to change.
+export function normalizeTrailingWhitespace(s: string): string {
+  let out: string | null = null;
+  let start = 0;
+  let lf = s.indexOf("\n");
+  while (lf >= 0) {
+    const tab = lf >= 1 && s.charCodeAt(lf - 1) === 0x09 /* \t */;
+    const end = tab ? lf - 1 : lf;
+    const spaces =
+      end >= 4 &&
+      s.charCodeAt(end - 4) === 0x20 &&
+      s.charCodeAt(end - 3) === 0x20 &&
+      s.charCodeAt(end - 2) === 0x20 &&
+      s.charCodeAt(end - 1) === 0x20;
+    if (spaces || tab) {
+      if (out === null) {
+        out = "";
+      }
+      if (spaces) {
+        out += s.slice(start, end - 4) + "  \n";
+      } else {
+        out += s.slice(start, end) + "\n";
+      }
+      start = lf + 1;
+    }
+    lf = s.indexOf("\n", lf + 1);
+  }
+  if (out === null) {
+    return s;
+  }
+  return out + s.slice(start);
+}
+
 // vditorDOM2MdPreprocess removes the caret and normalises the trailing white space of the input string.
 // PORT-NOTE: hook for the per-child cache (tasks/004), no behaviour change: see vditorDOM2MdPrepare.
 export function vditorDOM2MdPreprocess(htmlStr: string): string {
@@ -219,8 +261,7 @@ export function vditorDOM2MdPreprocess(htmlStr: string): string {
   htmlStr = strings.ReplaceAll(htmlStr, editor.FrontEndCaret, "");
 
   // Replace trailing white space, otherwise the HTML parse produces redundant nodes that lead to an empty code block
-  htmlStr = strings.ReplaceAll(htmlStr, "\t\n", "\n");
-  htmlStr = strings.ReplaceAll(htmlStr, "    \n", "  \n");
+  htmlStr = normalizeTrailingWhitespace(htmlStr);
   return htmlStr;
 }
 
@@ -612,7 +653,10 @@ Lute.prototype.adjustMath = function (this: Lute, n: html.Node): void {
     }
   }
 
-  if (strings.Fields(cls).includes("language-math")) {
+  // PORT-NOTE: perf, departs from vditor_wysiwyg.go:adjustMath: the substring test comes first. strings.Fields allocates the
+  // list of the class words of every node this pass visits, and a class word equal to "language-math" is also a substring
+  // of cls, so the condition is the same boolean.
+  if (strings.Contains(cls, "language-math") && strings.Fields(cls).includes("language-math")) {
     {
       const mathContent = util.DomAttrValue(n, "data-math");
       if ("" !== mathContent) {

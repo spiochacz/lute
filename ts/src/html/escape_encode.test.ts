@@ -233,3 +233,49 @@ test("EscapeHTML matches the pre-change implementation for extra lengths 120 to 
     }
   }
 });
+
+// UnescapeHTML and the common named references: the fast paths must give the same bytes as the general path.
+const generalUnescapeHTML = (h: Uint8Array): Uint8Array => conv.BytesFromString(escapeEncode.UnescapeHTMLStr(conv.StringFromBytes(h)));
+
+test("UnescapeHTML: ASCII without '&' gives a fresh copy with the same bytes", () => {
+  for (const s of ["", "a", "plain ASCII <b>tags</b> and \"quotes\"", "x".repeat(300)]) {
+    const h = conv.BytesFromString(s);
+    const got = escapeEncode.UnescapeHTML(h);
+    assert.deepEqual(got, h, JSON.stringify(s));
+    assert.notEqual(got, h, "the result is a fresh array, as Go's []byte(...) is");
+    assert.equal(slices.Cap(got), got.length, JSON.stringify(s));
+  }
+});
+
+test("UnescapeHTML: the fast path and the round trip agree on random inputs", () => {
+  let seed = 9001;
+  const rnd = (n: number): number => {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    return seed % n;
+  };
+  const pool = [0x61, 0x20, 0x3c, 0x3e, 0x22, 0x26, 0x26, 0x6c, 0x74, 0x3b, 0x0a, 0x7f, 0x80, 0xc3, 0xa9, 0xff, 0xed, 0xa0];
+  for (let i = 0; i < 4000; i++) {
+    const n = rnd(40);
+    const h = new Uint8Array(n);
+    for (let j = 0; j < n; j++) {
+      h[j] = pool[rnd(pool.length)];
+    }
+    assert.deepEqual(escapeEncode.UnescapeHTML(h), generalUnescapeHTML(h), `input ${Array.from(h).join(" ")}`);
+  }
+});
+
+test("UnescapeHTML: invalid UTF-8 without '&' still takes the round trip (U+FFFD for each invalid byte)", () => {
+  const h = Uint8Array.of(0x61, 0xff, 0x62);
+  assert.deepEqual(escapeEncode.UnescapeHTML(h), Uint8Array.of(0x61, 0xef, 0xbf, 0xbd, 0x62));
+});
+
+test("the common named references give the code points that lookupEntity gives", async () => {
+  const { lookupEntity } = await import("./entity.ts");
+  const { UnescapeString } = await import("./escape.ts");
+  for (const name of ["lt;", "gt;", "amp;", "quot;", "apos;", "nbsp;"]) {
+    assert.equal(UnescapeString("&" + name), lookupEntity(name), name);
+    assert.notEqual(lookupEntity(name), "", name);
+    // the same name followed by a letter, and inside a longer text, goes the same way
+    assert.equal(UnescapeString("x&" + name + "y"), "x" + lookupEntity(name) + "y", name);
+  }
+});

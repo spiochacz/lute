@@ -50,6 +50,38 @@ const replacementTable: number[] = [
   // 0x0D->'\u000D' is a no-op.
 ];
 
+// commonEntities are the six named references of the commonest entities in editor HTML, with the code point that
+// lookupEntity gives for each name (escape.test.ts checks every pair against lookupEntity). The names include the ';'.
+const commonEntities: Array<[Uint8Array, number]> = [
+  [conv.BytesFromString("lt;"), 0x3c /* < */],
+  [conv.BytesFromString("gt;"), 0x3e /* > */],
+  [conv.BytesFromString("amp;"), 0x26 /* & */],
+  [conv.BytesFromString("quot;"), 0x22 /* " */],
+  [conv.BytesFromString("apos;"), 0x27 /* ' */],
+  [conv.BytesFromString("nbsp;"), 0xa0],
+];
+
+// commonEntityRune returns the code point of the common named reference that s[1:end] spells out, or -1.
+// PORT-NOTE: perf, departs from html/escape.go:unescapeEntity: the name is compared with the bytes before the string of
+// the name is built and looked up. For these names (always with the ';', so the attribute rule that depends on the last
+// character does not apply) the answer is the one that lookupEntity gives for the same name, so the result is the same
+// as the general path below. Every other name, and the names without ';', take the general path.
+function commonEntityRune(s: Uint8Array, end: number): number {
+  for (const [name, rune] of commonEntities) {
+    if (name.length !== end - 1) {
+      continue;
+    }
+    let k = 0;
+    while (k < name.length && s[k + 1] === name[k]) {
+      k++;
+    }
+    if (k === name.length) {
+      return rune;
+    }
+  }
+  return -1;
+}
+
 // unescapeEntity reads an entity like "&lt;" from b[src:] and writes the
 // corresponding "<" to b[dst:], returning the incremented dst and src cursors.
 // Precondition: b[src] == '&' && dst <= src.
@@ -147,6 +179,10 @@ export function unescapeEntity(b: Uint8Array, dst: number, src: number, attribut
   let max = i;
   if (max < 1) {
     max = 1;
+  }
+  const common = commonEntityRune(s, max);
+  if (common >= 0) {
+    return [dst + utf8.EncodeRune(b.subarray(dst), common), src + i];
   }
   // PORT-NOTE: byte offset. entityName holds only ASCII letters, digits and ';', so its
   // length in UTF-16 units equals its length in bytes.

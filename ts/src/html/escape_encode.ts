@@ -50,6 +50,21 @@ export function EscapeHTMLStr(h: string): string {
 // PORT-NOTE: byte offset. The input is converted through a JS string, so bytes that are
 // not valid UTF-8 are not kept (conv.StringFromBytes), unlike Go's string(h).
 export function UnescapeHTML(h: Uint8Array): Uint8Array {
+  // PORT-NOTE: perf, departs from html/escape_encode.go:UnescapeHTML: input that is ASCII and has no '&' is returned as a
+  // fresh copy without the round trip through a string. The round trip gives the same bytes for it (UnescapeString returns
+  // its input when there is no '&', and an ASCII string encodes to its own code units), and the copy keeps Go's fresh
+  // result. Input with a byte of 0x80 or more takes the round trip, which also turns invalid UTF-8 into U+FFFD as before.
+  let plain = true;
+  for (let i = 0; i < h.length; i++) {
+    const c = h[i];
+    if (c === 0x26 /* & */ || c >= 0x80) {
+      plain = false;
+      break;
+    }
+  }
+  if (plain) {
+    return slices.Clone(h);
+  }
   return conv.BytesFromString(UnescapeString(conv.StringFromBytes(h)));
 }
 

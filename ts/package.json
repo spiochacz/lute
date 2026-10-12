@@ -13,6 +13,8 @@
     "test": "node --test \"src/**/*.test.ts\" \"test/**/*.test.ts\"",
     "test:full": "node --env-file=.env.full --test \"src/**/*.test.ts\" \"test/**/*.test.ts\"",
     "build": "node scripts/build.mjs",
+    "departures": "node tools/departures/build.mjs",
+    "departures:pin-diff": "node tools/departures/pin-diff.mjs",
     "bench:oracle": "node bench/oracle-baseline.ts",
     "bench:runtime": "node --expose-gc --max-semi-space-size=256 bench/runtime-micro.ts",
     "bench:runtime:aa": "node bench/aa.ts",

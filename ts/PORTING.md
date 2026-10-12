@@ -163,3 +163,10 @@ The port-only additions to the public surface (each listed here, and checked by 
 - `SetIncrementalDom2MdPolicy` and `GetIncrementalDom2MdPolicy` (ESM exports of `src/incremental/index.ts` only; the bundle does not have them).
 - `ast.NewNodeIDCalls` (`src/ast/node.ts`): the counter of `NewNodeID` calls, read by the cache to refuse a child whose phase created a node ID.
 - `ADJUST_VDITOR_DOM_PASSES` and `runAdjustVditorDOMPass` (`src/vditor_wysiwyg.ts`): the one table of the DOM passes of `adjustVditorDOM`, which the cache's sandbox imports. The order and the arguments of the passes are those of the Go source.
+
+## Departures manifest
+
+`ts/DEPARTURES.md` lists every `PORT-NOTE` of `ts/src` (one row each: file, line, kind, the Go file and function the note names, and the text) and the oracle patches with their purpose. It is generated, not written by hand:
+
+- `npm run departures` (in `ts/`) regenerates it. `npm test` runs `test/departures.test.ts`, which fails when the committed file differs from the sources, so run the script after any change to a `PORT-NOTE` or to the lines around it, and commit the result.
+- `npm run departures:pin-diff -- <old commit> <new commit>` lists the Go files that changed between two upstream commits (read-only `git diff`) and the rows that name them. Run it with the old and the new value of `UPSTREAM_PIN` when the pin moves; those rows are the places where a hand merge is needed.

@@ -832,3 +832,39 @@ Method: variants built outside the repository from a copy of `ts/src`, bundles c
 Each row is below the 20 percent threshold of the benchmark; the direction is the same in 15 of 16 rows in two independent runs. Adopted for the memory (the owner's interest) with a small time gain. `npm run typecheck` clean, `npm test` 4,138 tests, 4,130 pass, 8 skipped, 0 fail.
 
 Not done: releasing the DOM root before rendering; attribute arrays only for elements with attributes (up to 0.5 MB).
+
+## Optimisation wave 5 (2026-10-12)
+
+Source of the candidates: a CPU profile of `VditorDOM2Md` on the spec document (tokenizer 20 percent, DOM passes and tree building 24 percent, `strings.ReplaceAll` 8 percent, `conv` 7 percent, entities 7 percent) and the analysis in `007-bytes-string-conversions-in-html-path.md`. Implemented by a Haiku agent, one step at a time, each with a micro measurement on recorded real inputs (results compared on every input, two processes) as its gate; verified by the coordinator. Base: commit `fb0a64c7`.
+
+| step | what | why it was slow | gate measurement (new / old time, or speed-up) | kept |
+|---|---|---|---|---|
+| W1 | `runtime/conv.ts`: interning cache for decodes of at most 32 bytes (4,096 direct-mapped slots, hit verified by byte comparison), one fill loop for ASCII encodes up to 256 units | about 46,000 small conversions per call; Go pays nothing for them | decodes 0.65x and 0.80x, encodes 0.92x and 0.83x (warm cache; a cold replay in a fresh process is at parity) | yes |
+| W2 | `bytes.Buffer.String()` through `conv.StringFromBytes` | it still used the validate-then-decode path that `conv` left in wave 1 | 0.26x to 0.32x on the arrays of one `HTML2Md` / `VditorIRDOM2Md` call | yes |
+| W3 | entities: common names looked up by bytes; `UnescapeHTML` clones when there is no `&` | 15,848 entity-name decodes per call; a decode/encode round trip for text without entities | unescape 0.85x / 0.62x, `UnescapeHTML` 0.77x / 0.55x | yes |
+| W4 | the preprocess of `VditorDOM2Md` / `VditorIRDOM2Md`: one pass over the line feeds instead of three `ReplaceAll` passes | not the matches (20 in the spec DOM) but three full scans of 515 KB and a split/join rebuild | 2.2x to 2.4x faster (WYSIWYG), 2.4x (IR); 100,000 random strings equal to the three-call version | yes |
+| W5 | `adjustMath`: a cheap `Contains` test before the class list is split | `strings.Fields` allocated for every node | 1.45x to 2.7x faster; DOM after the pass identical | yes |
+| W5 | `searchEmptyNodes`: reorder of a trim | | 1.08x to 1.13x, inside the bias of the harness | reverted |
+| W5 | highlight-span pass | 1.2 percent of the call, no safe saving found | | not changed |
+
+Not explained: 89 percent of the time of `searchEmptyNodes` is its own code and the cause was not found.
+
+**Whole methods, coordinator's run** (`bench:macro` with the new short-process defaults, 12 rounds, interleaved, bundle of this state against a bundle built from `fb0a64c7`; ratio new / old on the fastest process; hashes agree in 14 of 14 rows; 35 of 336 processes discarded by the canary):
+
+| method | small (1 KB) | spec (212 KB) |
+|---|---|---|
+| `VditorDOM2Md` | 0.93 | 0.86 |
+| `HTML2Md` | 0.98 (weak row: 13 of 24 processes discarded) | 0.94 |
+| `BlockDOM2Md` | 0.92 | 1.03 |
+| `SpinVditorDOM` | 0.96 | 0.96 |
+| `SpinBlockDOM` | 0.97 | 0.99 |
+| `Md2VditorDOM` | 0.99 | 0.99 |
+| `MarkdownStr` (control: none of the steps is on its path except W1) | 0.97 | 0.97 |
+
+Reading: the control shows a bias or noise of about 3 percent in favour of the new bundle, so only `VditorDOM2Md` (7 and 14 percent) and perhaps `HTML2Md` spec and `BlockDOM2Md` small stand out; the rest is not resolved by this benchmark. Absolute times of this run, port: `VditorDOM2Md` 224 µs / 27.1 ms, `HTML2Md` 311 µs / 30.2 ms, `MarkdownStr` 154 µs / 20.9 ms.
+
+**Tooling added in the same wave:** `ts/DEPARTURES.md` (generated: every `PORT-NOTE` of `ts/src`, 493 rows, and the oracle patches), `npm run departures`, `npm run departures:pin-diff -- <old> <new>` (which departures name a Go file that changed between two upstream commits), and `ts/test/departures.test.ts` (fails when the manifest is stale).
+
+**Benchmark tooling:** this run is also the first use of the short-process `bench:macro` (canary per child, 12 rounds, discarded processes reported). It works; about 10 percent of the processes were discarded, one row lost more than half.
+
+Tests: `npm test` 4,176 tests, 4,168 pass, 8 skipped, 0 fail (coordinator); `npm run test:full` 4,187 tests, 4,179 pass, 0 fail, and the cache fuzzer in both modes with 0 mismatches (agent).

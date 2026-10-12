@@ -249,3 +249,70 @@ test("BytesFromString matches the encoder path on 24,000 generated strings", () 
     assert.equal(hex(grownGot), hex(grownWant), label);
   });
 });
+
+// A deterministic generator for the differential tests below (the same LCG as the tests above).
+const lcg = (seed: number): (n: number) => number => {
+  let s = seed;
+  return (n: number): number => {
+    s = (s * 1103515245 + 12345) & 0x7fffffff;
+    return s % n;
+  };
+};
+
+test("BytesFromString equals TextEncoder for random strings of up to 300 code units", () => {
+  const enc = new TextEncoder();
+  const rnd = lcg(777);
+  const pool = ["a", "z", " ", "\n", "中", "😀", "\uD800", "\uDC00", "é", "﻿"];
+  for (let i = 0; i < 3000; i++) {
+    const len = rnd(300);
+    const ascii = rnd(2) === 0;
+    let s = "";
+    for (let j = 0; j < len; j++) {
+      s += ascii ? String.fromCharCode(0x20 + rnd(95)) : pool[rnd(pool.length)];
+    }
+    const got = conv.BytesFromString(s);
+    assert.deepEqual(got, enc.encode(s), JSON.stringify(s));
+    assert.equal(got.buffer.byteLength, got.length, JSON.stringify(s));
+  }
+});
+
+test("StringFromBytesWithCache equals StringFromBytesSlow on random bytes, with tiny tables that force collisions", () => {
+  const rnd = lcg(4242);
+  const pool = [0x00, 0x41, 0x7f, 0x80, 0xbf, 0xc0, 0xc2, 0xdf, 0xe0, 0xe4, 0xed, 0xef, 0xf0, 0xf4, 0xf5, 0xff, 0x20];
+  const inputs: Uint8Array[] = [new Uint8Array(0)];
+  for (let i = 0; i < 400; i++) {
+    const n = rnd(40); // lengths 33 to 39 bypass the cache and must still agree
+    const b = new Uint8Array(n);
+    for (let j = 0; j < n; j++) {
+      b[j] = rnd(3) === 0 ? rnd(256) : pool[rnd(pool.length)];
+    }
+    inputs.push(b);
+  }
+  const tables = [new conv.DecodeCache(1), new conv.DecodeCache(2), new conv.DecodeCache(8), new conv.DecodeCache(4096)];
+  // three rounds: the first fills the tables, the later ones hit (and collide, with one or two slots)
+  for (let round = 0; round < 3; round++) {
+    for (const t of tables) {
+      for (const b of inputs) {
+        assert.equal(conv.StringFromBytesWithCache(t, b), conv.StringFromBytesSlow(b), hex(b));
+      }
+    }
+    for (const b of inputs) {
+      assert.equal(conv.StringFromBytes(b), conv.StringFromBytesSlow(b), hex(b));
+    }
+  }
+});
+
+test("StringFromBytesWithCache keeps its own copy of the key bytes", () => {
+  const cache = new conv.DecodeCache(4);
+  const b = Uint8Array.of(0x61, 0x62, 0x63);
+  assert.equal(conv.StringFromBytesWithCache(cache, b), "abc");
+  b[1] = 0x78; // the caller reuses its buffer
+  assert.equal(conv.StringFromBytesWithCache(cache, Uint8Array.of(0x61, 0x62, 0x63)), "abc");
+  assert.equal(conv.StringFromBytesWithCache(cache, b), "axc");
+});
+
+test("DecodeCache rejects a slot count that is not a power of two", () => {
+  assert.throws(() => new conv.DecodeCache(0));
+  assert.throws(() => new conv.DecodeCache(3));
+  assert.doesNotThrow(() => new conv.DecodeCache(1));
+});

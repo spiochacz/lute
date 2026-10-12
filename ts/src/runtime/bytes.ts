@@ -21,6 +21,7 @@
 import * as utf8 from "./utf8.ts";
 import * as unicode from "./unicode.ts";
 import { Cap, Clone, Copy } from "./slices.ts";
+import { StringFromBytes } from "./conv.ts";
 
 const emptyBytes = (): Uint8Array => new Uint8Array(0);
 
@@ -29,8 +30,6 @@ const asciiSpace = new Uint8Array(256);
 for (const c of [0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x20]) {
   asciiSpace[c] = 1;
 }
-
-const textDecoder = new TextDecoder("utf-8", { ignoreBOM: true });
 
 // scratch is used by WriteRune to encode a rune before copying it.
 const scratch = new Uint8Array(4);
@@ -711,19 +710,12 @@ export class Buffer {
 
   // String returns the contents decoded as UTF-8. Each invalid byte becomes one
   // U+FFFD, as with Go's rune decoding.
+  // PORT-NOTE: perf, departs from Go's bytes.Buffer.String (no Lute source line; runtime layer): the decoding is
+  // conv.StringFromBytes, the same function that string(b) uses everywhere else in the port. It gives the same value
+  // (valid input decodes with the BOM kept, invalid input is decoded one U+FFFD per invalid byte, as in the loop it
+  // replaces), and it has the short-ASCII path and the decode cache. DomText, DomTexhtml and domCode call this on every text node.
   String(): string {
-    const b = this.Bytes();
-    if (utf8.Valid(b)) {
-      return textDecoder.decode(b);
-    }
-    let out = "";
-    for (let i = 0; i < b.length; ) {
-      const v = utf8.DecodeRunePacked(b, i);
-      out += String.fromCodePoint(v & 0xffffff);
-      const w = v >>> 24;
-      i += w;
-    }
-    return out;
+    return StringFromBytes(this.Bytes());
   }
 
   // Len returns the number of bytes of the unread contents.
